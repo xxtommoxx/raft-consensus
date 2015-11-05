@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package protocol;
+
+message AppendEntriesRequest {
+	uint32 term = 1;
+
+	uint32 prev_log_index = 2;
+	uint32 prev_log_term = 3;
+
+	uint32 commit_index = 4;
+
+	map<string, Node> node_locations = 5;
+	message Node {
+			string host = 1;
+			uint32 port = 2;
+	}
+
+	repeated LogEntry entries = 6;
+	message LogEntry {
+		string cmd = 1;
+		bytes value = 2;
+	}
+
+	string leader_id = 7;
+}
+
+message AppendEntriesResponse {
+	uint32 term = 1;
+	bool success = 2;
+}

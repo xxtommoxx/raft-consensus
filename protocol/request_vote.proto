@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package protocol;
+
+message VoteRequest {
+	uint32 term = 1;
+
+	uint32 last_log_index = 2;
+	uint32 last_log_term = 3;
+
+	string candidate_id = 4;
+}
+
+
+message VoteResponse {
+	uint32 term = 1;
+	bool vote_granted = 2;
+}
