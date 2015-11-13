@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package protocol;
+package rpc;
 
 message InstallSnapshotRequest {
 	uint32 term = 1;

@@ -2,7 +2,7 @@
 // source: request_vote.proto
 // DO NOT EDIT!
 
-package protocol
+package rpc
 
 import proto "github.com/golang/protobuf/proto"
 import fmt "fmt"
