@@ -1,8 +1,6 @@
-package rpc;
+syntax = "proto3";
 
-import "request_vote.proto";
-import "install_snapshot.proto";
-import "append_entries.proto";
+package rpc;
 
 message VoteRequest {
 	uint32 term = 1;
