@@ -1,6 +1,10 @@
 package raft
 
-type Id string
+type Location struct {
+	id   Id
+	host string
+	port uint32
+}
 
 type Config struct {
 	minElectionTimeout    uint32
@@ -8,20 +12,14 @@ type Config struct {
 	peers                 []Location
 }
 
-type Location struct {
-	id   Id
-	host string
-	port uint32
-}
-
-type Node struct {
+type node struct {
 	config Config
 }
 
-func NewNode(config Config, stateStore *StateStore) (node *Node) {
-	&Node{config: config}
+func NewNode(config Config, stateStore *StateStore) (node *node) {
+	return &node{config: config}
 }
 
-func (n *Node) bootstrap() {
+func (n *node) bootstrap() {
 
 }

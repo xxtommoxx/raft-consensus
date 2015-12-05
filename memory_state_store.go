@@ -5,8 +5,8 @@ type InMemoryStateStore struct {
 	nodeIdVotedFor Id
 }
 
-func NewInMemoryStateStore() {
-	&InMemoryStateStore{}
+func NewInMemoryStateStore() *InMemoryStateStore {
+	return &InMemoryStateStore{}
 }
 
 func (s *InMemoryStateStore) CurrentTerm() uint32 {
