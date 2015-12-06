@@ -1,5 +1,7 @@
 package raft
 
+type Id string
+
 type Location struct {
 	id   Id
 	host string
@@ -16,10 +18,6 @@ type node struct {
 	config Config
 }
 
-func NewNode(config Config, stateStore *StateStore) (node *node) {
+func NewNode(config Config, stateStore *StateStore) *node {
 	return &node{config: config}
-}
-
-func (n *node) bootstrap() {
-
 }

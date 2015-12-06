@@ -1,6 +1,9 @@
 package fsm
 
-import "reflect"
+import (
+	"fmt"
+	"reflect"
+)
 
 type State uint32
 type EventType reflect.Type
@@ -81,7 +84,7 @@ func (fsm *fsm) Transition(e Event) State {
 			h.Handle(e, fsm.currentState)
 		}
 	} else {
-		panic("No handler found.")
+		panic(fmt.Sprintf("No handler found for event type: %v", eventType))
 	}
 
 	if eventMap, ok := fsm.stateTransitions[fsm.currentState]; ok {
@@ -90,7 +93,7 @@ func (fsm *fsm) Transition(e Event) State {
 			return nextState
 		}
 	}
-	panic("Specified FSM does not know how to handle event: while in state:")
+	panic(fmt.Sprintf("No valid transition from state: %v for event type: %v", fsm.currentState, eventType))
 }
 
 func (fsm *fsm) updateState(newState State) {
