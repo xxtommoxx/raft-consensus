@@ -2,10 +2,7 @@ package raft
 
 import (
 	"fmt"
-	"github.com/xxtommoxx/raft-consensus/rpc"
-	"github.com/xxtommoxx/raft-consensus/util/fsm"
 	"math/rand"
-	"sync"
 	"time"
 )
 
@@ -42,44 +39,193 @@ const (
 // messages
 type KeepAliveTimeout struct{}
 
-type NodeFSM struct {
+type GenericEventHandler interface {
+	handle(event interface{})
 }
 
-type FollowerListener interface {
-	KeepAliveTimeout(currentTerm uint32)
-}
-
-/*********** CANDIDATE HANDLER **************/
-
-// type QuorumStrategy interface {
-// 	obtained(currentCount uint32) bool
+// type TermHandler struct {
+// 	eventHandler *EventHandler
 // }
 //
-// type CandidateHandler struct {
-// 	term         uint32
-// 	voteReceived uint32
-// 	quorum       QuorumStrategy
-// }
+// func (h *TermHandler) start() {}
 //
-// func (h *CandidateHandler) start(term uint32) {
-// 	h.term = term
-// }
+// func (h *TermHandler) stop() {}
 //
-// func (h *CandidateHandler) Handle(e interface{}) (fsm.State, bool) {
-// 	switch t := e.(type) {
-// 	default:
-// 		return fsm.InvalidTransition()
-// 	case VoteResponse:
-// 		return fsm.Transition(Candidate)
-// 	case rpc.KeepAliveResponse:
-// 		h.keepAlive <- Reset
-// 		return fsm.Transition(Follower)
+// func (h *TermHandler) Handle(currentTerm uint32, eventTerm uint32, e interface{}) (fsm.State, bool) {
+// 	if eventTerm > currentTerm {
+// 		return fsm.Transition(FOLLOWER)
+// 	} else {
+// 		h.eventHandler.Handle(currentTerm, eventTerm, e)
 // 	}
 // }
+//
+type FollowerListener interface {
+	KeepAliveTimeout(term uint32)
+}
 
-/*********** FOLLOWER HANDLER **************/
+type Promise struct {
+	result interface{}
+	err    error
 
-/* Timer state */
+	done chan struct{}
+}
+
+func NewPromise(f func() (interface{}, error)) *Promise {
+
+	done := make(chan struct{})
+
+	promise := &Promise{done: done}
+
+	go func() {
+		defer close(done)
+
+		result, err := f()
+		promise.result = result
+		promise.err = err
+	}()
+
+	return promise
+}
+
+func (p *Promise) Get() (interface{}, error) {
+	<-p.done
+	return p.result, p.err
+}
+
+type State int
+
+const (
+	NCandidate State = iota
+	NFollower
+	NLeader
+	NInvalid
+)
+
+type NodeFSM struct {
+	current State
+	maxTerm uint32
+
+	fsm map[State]internal
+}
+
+type Lifecycle interface {
+	Stop() error
+	Start(term uint32) error
+}
+
+type internal struct {
+	c            chan interface{}
+	lifecycle    Lifecycle
+	stateHandler func() State
+}
+
+func NewNodeFSM(candidate *CandidateHandler) *NodeFSM {
+
+	nodeFSM := &NodeFSM{}
+
+	fsm := map[State]internal{}
+
+	nodeFSM.fsm = fsm
+
+	return nodeFSM
+}
+
+func (this *NodeFSM) start() {
+	go func() {
+		for {
+			currentI := this.fsm[this.current]
+
+			nextState := currentI.stateHandler()
+
+			if nextState != this.current {
+				currentI.lifecycle.Stop()
+				this.fsm[nextState].lifecycle.Start(this.maxTerm)
+				this.current = nextState
+			}
+
+		}
+	}()
+}
+
+func (this *NodeFSM) sendRequest(reqTerm uint32, fn func(chan interface{})) error {
+
+	if reqTerm >= this.maxTerm {
+		this.maxTerm = reqTerm
+
+		stateChan := this.fsm[this.current].c
+		fn(stateChan)
+	} else {
+		// return an error indicating failed
+	}
+
+	return nil
+}
+
+func (this *NodeFSM) makeFollowerState() *internal {
+	followerChan := make(chan interface{})
+
+	stateHandler := func() State {
+		req := <-followerChan
+
+		switch r := req.(type) {
+		default:
+			fmt.Println(r)
+			return NFollower
+		}
+
+		return Candidate
+	}
+
+	return &internal{c: followerChan, lifecycle: nil, stateHandler: stateHandler}
+}
+
+/*
+
+
+create a promise --> promise will wait for channels response
+1) get the current state's channel
+2) create a promise to put it on the chan
+
+ one go routine for looper that puts stuff on the chan
+
+state needs a chan for publishing events and a select function that returns next state
+
+for {
+
+	handleChan()
+want a function that returns the state after selecting
+
+
+}
+
+
+ select followerchan{
+	case <-----------`bleh
+
+
+ }
+
+
+
+*/
+
+func (this *NodeFSM) candidate() {
+
+}
+
+func (this *NodeFSM) requestVote() *Promise {
+	return nil
+}
+
+type RequestVote struct {
+	term uint32
+}
+
+func (this *NodeFSM) onTimeout(timeout KeepAliveTimeout) {
+}
+
+// follower code
+
 const (
 	Close = iota
 	Reset
@@ -95,14 +241,9 @@ type FollowerHandler struct {
 	timeoutRange int64
 	keepAlive    chan int
 	random       *rand.Rand
-
-	lifeCycleMutex *sync.Mutex
-
-	listener FollowerListener
 }
 
 func NewInstance() *FollowerHandler {
-	//timeoutRange := h.timeout.MaxMillis - h.timeout.MinMillis + 1
 	return &FollowerHandler{}
 }
 
@@ -111,7 +252,7 @@ func (h *FollowerHandler) leaderTimeout() time.Duration {
 }
 
 func (h *FollowerHandler) Start() {
-	fmt.Println("Starting follower handler")
+	fmt.Println("Starting follower")
 
 	go func() {
 		h.keepAlive = make(chan int)
@@ -124,7 +265,7 @@ func (h *FollowerHandler) Start() {
 		for {
 			select {
 			case <-timer.C:
-				h.listener.KeepAliveTimeout()
+				// h.listener.KeepAliveTimeout(h.currentTerm) TODO think about whether we need to pass currentTerm
 			case timerEvent := <-h.keepAlive:
 				if timerEvent == Close {
 					fmt.Println("Terminating leader election timer")
@@ -149,14 +290,53 @@ func (h *FollowerHandler) Stop() {
 	}
 }
 
-func (h *FollowerHandler) Handle(e interface{}) (fsm.State, bool) {
-	switch e.(type) {
-	default:
-		return fsm.InvalidTransition()
-	case KeepAliveTimeout:
-		return fsm.Transition(Candidate)
-	case rpc.KeepAliveResponse:
-		h.keepAlive <- Reset
-		return fsm.Transition(Follower)
-	}
+// candidate code
+
+type QuorumStrategy interface {
+	obtained(currentCount uint32) bool
+}
+
+type Client interface {
+	sendRequestVote() <-chan VoteResponse
+}
+
+type VoteResponse struct{}
+
+type BaseEvent struct {
+	term uint32
+}
+
+type CandidateHandler struct {
+	quorum   QuorumStrategy
+	listener CandidateListener
+	client   Client
+}
+
+type CandidateListener interface {
+	quorumObtained(term uint32)
+}
+
+func (h *CandidateHandler) start(term uint32) error {
+
+	var currentVoteCount uint32 = 0
+
+	go func() {
+		responseChan := h.client.sendRequestVote()
+		for {
+			select {
+			case <-responseChan:
+				currentVoteCount++
+				if h.quorum.obtained(currentVoteCount) {
+					// todo close responseChan
+					h.listener.quorumObtained(term)
+				}
+			}
+		}
+	}()
+
+	return nil
+}
+
+func (h *CandidateHandler) stop() error {
+	return nil
 }
