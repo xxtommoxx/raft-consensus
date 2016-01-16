@@ -1,6 +1,6 @@
 package raft
 
-type Lifecycle interface {
+type Service interface {
 	Stop() error
 	Start(term uint32) error
 }

@@ -17,6 +17,7 @@ type FollowerListener interface {
 
 type Follower struct {
 	timeout      LeaderTimeout
+	Listener     FollowerListener
 	timeoutRange int64
 	keepAlive    chan int
 	random       *rand.Rand
@@ -26,7 +27,7 @@ func NewInstance() *Follower {
 	return &Follower{}
 }
 
-func (h *Follower) Start() {
+func (h *Follower) Start(term uint32) error {
 	fmt.Println("Starting follower")
 
 	go func() {
@@ -40,7 +41,9 @@ func (h *Follower) Start() {
 		for {
 			select {
 			case <-timer.C:
-				// h.listener.KeepAliveTimeout(h.currentTerm) TODO think about whether we need to pass currentTerm
+				if h.Listener != nil {
+					h.Listener.KeepAliveTimeout(term)
+				}
 			case timerEvent := <-h.keepAlive:
 				if timerEvent == Close {
 					fmt.Println("Terminating leader election timer")
@@ -57,12 +60,16 @@ func (h *Follower) Start() {
 			}
 		}
 	}()
+
+	return nil
 }
 
-func (h *Follower) Stop() {
+func (h *Follower) Stop() error {
 	if h.keepAlive != nil {
 		h.keepAlive <- Close
 	}
+
+	return nil
 }
 
 func (h *Follower) leaderTimeout() time.Duration {
