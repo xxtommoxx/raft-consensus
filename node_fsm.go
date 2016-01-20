@@ -1,7 +1,9 @@
 package raft
 
 import (
+	"errors"
 	"fmt"
+	"reflect"
 )
 
 var _ = fmt.Printf
@@ -67,7 +69,6 @@ func (this *NodeFSM) followerHandler(follower *Follower) stateHandler {
 
 		switch req.(type) {
 		default:
-			// todo
 			return invalidState
 		}
 
@@ -100,18 +101,52 @@ func (this *NodeFSM) Start() {
 	}()
 }
 
-func (this *NodeFSM) sendRequest(term uint32, fn func(chan interface{})) error {
-	if term > this.maxTerm {
+func (this *NodeFSM) processAsync(ctx requestContext, fn func()) {
+	if ctx.term > this.maxTerm { // do this outside of the go routine for sync purposes
 		// todo store the term
-		this.maxTerm = term
+		this.maxTerm = ctx.term
 	}
 
-	if term == this.maxTerm {
-		requestsChan := this.fsm[this.currentState].requests
-		fn(requestsChan)
+	if ctx.term == this.maxTerm {
+		go fn()
 	} else {
-		// todo return error
+		go func() {
+			ctx.errorChan <- errors.New("Old term")
+		}()
 	}
+}
 
-	return nil
+type requestContext struct {
+	term         uint32
+	request      interface{}
+	errorChan    chan error
+	responseChan chan interface{}
+}
+
+func (this *NodeFSM) sendToStateHandler(term uint32, request interface{}, responseChan interface{}) {
+	_, handler := this.getCurrent()
+
+	handler.requests <- requestContext{
+		term:         term,
+		request:      request,
+		errorChan:    make(chan error),
+		responseChan: toChan(responseChan),
+	}
+}
+
+func toChan(in interface{}) chan interface{} {
+	out := make(chan interface{})
+	cin := reflect.ValueOf(in)
+
+	go func() {
+		defer close(out)
+		for {
+			x, ok := cin.Recv()
+			if !ok {
+				return
+			}
+			out <- x.Interface()
+		}
+	}()
+	return out
 }

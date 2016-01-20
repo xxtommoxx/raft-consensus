@@ -35,7 +35,6 @@ func (h *Follower) Start(term uint32) error {
 		defer close(h.keepAlive)
 
 		timer := time.NewTimer(h.leaderTimeout())
-
 		defer timer.Stop()
 
 		for {
