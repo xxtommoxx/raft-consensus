@@ -3,6 +3,7 @@ package raft
 import (
 	"errors"
 	"fmt"
+	"github.com/xxtommoxx/raft-consensus/rpc"
 	"reflect"
 )
 
@@ -36,7 +37,7 @@ const (
 )
 
 type stateHandler struct {
-	requests   chan interface{}
+	ch         chan requestContext
 	service    Service
 	transition func() state
 }
@@ -62,20 +63,26 @@ func (this *NodeFSM) candidateHandler(candidate *Candidate) stateHandler {
 }
 
 func (this *NodeFSM) followerHandler(follower *Follower) stateHandler {
-	requests := make(chan interface{})
+	ch := make(chan requestContext)
 
 	transition := func() state {
-		req := <-requests
+		context := <-ch
 
-		switch req.(type) {
+		switch r := context.request.(type) {
+
+		case *rpc.VoteRequest:
+			this.processAsync(context, func() {
+				follower.requestVote(r)
+			})
+
+			return followerState
 		default:
 			return invalidState
 		}
-
 	}
 
 	return stateHandler{
-		requests:   requests,
+		ch:         ch,
 		service:    follower,
 		transition: transition,
 	}
@@ -126,7 +133,7 @@ type requestContext struct {
 func (this *NodeFSM) sendToStateHandler(term uint32, request interface{}, responseChan interface{}) {
 	_, handler := this.getCurrent()
 
-	handler.requests <- requestContext{
+	handler.ch <- requestContext{
 		term:         term,
 		request:      request,
 		errorChan:    make(chan error),

@@ -2,7 +2,9 @@ package raft
 
 import (
 	"fmt"
+	"github.com/xxtommoxx/raft-consensus/rpc"
 	"math/rand"
+	"sync"
 	"time"
 )
 
@@ -11,8 +13,13 @@ const (
 	Reset
 )
 
+type KeepAliveTimeout struct {
+	term           uint32
+	waitDurationMs uint64
+}
+
 type FollowerListener interface {
-	KeepAliveTimeout(term uint32)
+	OnKeepAliveTimeout(term uint32)
 }
 
 type Follower struct {
@@ -21,10 +28,24 @@ type Follower struct {
 	timeoutRange int64
 	keepAlive    chan int
 	random       *rand.Rand
+
+	votedForId   string
+	votedForTerm uint32
+
+	mutex *sync.Mutex
 }
 
 func NewInstance() *Follower {
 	return &Follower{}
+}
+
+func (h *Follower) newTimer() *Timer {
+	duration := time.Duration(h.random.Int63n(h.timeoutRange)+h.timeout.MinMillis) * time.Millisecond
+	return time.AfterFunc(duration, func() {
+		if h.Listener != nil {
+			// h.Listener.OnKeepAliveTimeout(h.
+		}
+	})
 }
 
 func (h *Follower) Start(term uint32) error {
@@ -39,10 +60,6 @@ func (h *Follower) Start(term uint32) error {
 
 		for {
 			select {
-			case <-timer.C:
-				if h.Listener != nil {
-					h.Listener.KeepAliveTimeout(term)
-				}
 			case timerEvent := <-h.keepAlive:
 				if timerEvent == Close {
 					fmt.Println("Terminating leader election timer")
@@ -55,6 +72,15 @@ func (h *Follower) Start(term uint32) error {
 					if !timer.Reset(duration) {
 						timer = time.NewTimer(duration)
 					}
+				}
+			/*
+				TODO: a race condition is possible whereby a request was just
+				received before the timer just expired but it was scheduled out before it had a chance to
+				send reset
+			*/
+			case <-timer.C:
+				if h.Listener != nil {
+					h.Listener.OnKeepAliveTimeout(&KeepAliveTimeout(term))
 				}
 			}
 		}
@@ -71,6 +97,16 @@ func (h *Follower) Stop() error {
 	return nil
 }
 
-func (h *Follower) leaderTimeout() time.Duration {
-	return time.Duration(h.random.Int63n(h.timeoutRange)+h.timeout.MinMillis) * time.Millisecond
+func (this *Follower) requestVote(req *rpc.VoteRequest) (bool, error) {
+	this.mutex.Lock()
+	defer this.mutex.Unlock()
+
+	if this.votedForTerm < req.Term {
+		// todo store this
+		this.votedForTerm = req.Term
+		this.votedForId = req.CandidateId
+		return true, nil
+	}
+
+	return false, nil
 }
