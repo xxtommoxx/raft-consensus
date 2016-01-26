@@ -14,12 +14,11 @@ const (
 )
 
 type KeepAliveTimeout struct {
-	term           uint32
-	waitDurationMs uint64
+	term uint32
 }
 
 type FollowerListener interface {
-	OnKeepAliveTimeout(term uint32)
+	OnKeepAliveTimeout(timeout *KeepAliveTimeout)
 }
 
 type Follower struct {
@@ -39,13 +38,8 @@ func NewInstance() *Follower {
 	return &Follower{}
 }
 
-func (h *Follower) newTimer() *Timer {
-	duration := time.Duration(h.random.Int63n(h.timeoutRange)+h.timeout.MinMillis) * time.Millisecond
-	return time.AfterFunc(duration, func() {
-		if h.Listener != nil {
-			// h.Listener.OnKeepAliveTimeout(h.
-		}
-	})
+func (h *Follower) leaderTimeout() time.Duration {
+	return time.Duration(h.random.Int63n(h.timeoutRange)+h.timeout.MinMillis) * time.Millisecond
 }
 
 func (h *Follower) Start(term uint32) error {
@@ -76,11 +70,11 @@ func (h *Follower) Start(term uint32) error {
 			/*
 				TODO: a race condition is possible whereby a request was just
 				received before the timer just expired but it was scheduled out before it had a chance to
-				send reset
+				send Reset
 			*/
 			case <-timer.C:
 				if h.Listener != nil {
-					h.Listener.OnKeepAliveTimeout(&KeepAliveTimeout(term))
+					h.Listener.OnKeepAliveTimeout(&KeepAliveTimeout{term})
 				}
 			}
 		}
@@ -101,7 +95,7 @@ func (this *Follower) requestVote(req *rpc.VoteRequest) (bool, error) {
 	this.mutex.Lock()
 	defer this.mutex.Unlock()
 
-	if this.votedForTerm < req.Term {
+	if this.votedForTerm < req.Term { // TODO: all need to check log entry
 		// todo store this
 		this.votedForTerm = req.Term
 		this.votedForId = req.CandidateId

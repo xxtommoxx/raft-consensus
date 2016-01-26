@@ -21,7 +21,6 @@ type CandidateListener interface {
 }
 
 func (h *Candidate) start(term uint32) error {
-
 	var currentVoteCount uint32 = 0
 
 	go func() {

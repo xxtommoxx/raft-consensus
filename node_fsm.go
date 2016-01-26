@@ -8,6 +8,7 @@ import (
 )
 
 var _ = fmt.Printf
+var _ = &rpc.VoteRequest{}
 
 /**
 	An fsm that contains three states -- leader, follower and candidate.
@@ -19,12 +20,13 @@ var _ = fmt.Printf
 	the fsm transition to another state. For all requests we can quickly know what the next will be without
 	doing the work that might take some time.
 **/
-
 type NodeFSM struct {
 	currentState state
 	maxTerm      uint32
 
-	fsm map[state]stateHandler
+	fsm        map[state]stateHandler
+	requestCh  chan requestContext
+	internalCh chan interface{} // internal events where no response is needed
 }
 
 type state int
@@ -37,7 +39,6 @@ const (
 )
 
 type stateHandler struct {
-	ch         chan requestContext
 	service    Service
 	transition func() state
 }
@@ -63,29 +64,38 @@ func (this *NodeFSM) candidateHandler(candidate *Candidate) stateHandler {
 }
 
 func (this *NodeFSM) followerHandler(follower *Follower) stateHandler {
-	ch := make(chan requestContext)
-
 	transition := func() state {
-		context := <-ch
 
-		switch r := context.request.(type) {
-
-		case *rpc.VoteRequest:
-			this.processAsync(context, func() {
-				follower.requestVote(r)
-			})
-
-			return followerState
-		default:
+		select {
+		case internalEvent := <-this.internalCh:
+			fmt.Println(internalEvent)
 			return invalidState
+		case reqCtx := <-this.requestCh:
+			nextState, responseFn := func() (state, func() (interface{}, error)) {
+				switch r := reqCtx.request.(type) {
+
+				case *rpc.VoteRequest:
+					return followerState, func() (interface{}, error) { return follower.requestVote(r) }
+				}
+
+				return invalidState, invalidResponseFn
+			}()
+
+			this.processAsync(reqCtx, responseFn)
+
+			return nextState
 		}
+
 	}
 
 	return stateHandler{
-		ch:         ch,
 		service:    follower,
 		transition: transition,
 	}
+}
+
+func invalidResponseFn() (interface{}, error) {
+	return nil, nil
 }
 
 func (this *NodeFSM) getCurrent() (state, stateHandler) {
@@ -93,6 +103,7 @@ func (this *NodeFSM) getCurrent() (state, stateHandler) {
 }
 
 func (this *NodeFSM) Start() {
+
 	// the main loop that processes requests for the current state
 	go func() {
 		for {
@@ -108,18 +119,31 @@ func (this *NodeFSM) Start() {
 	}()
 }
 
-func (this *NodeFSM) processAsync(ctx requestContext, fn func()) {
+func (this *NodeFSM) processAsync(ctx requestContext, fn func() (interface{}, error)) error {
 	if ctx.term > this.maxTerm { // do this outside of the go routine for sync purposes
 		// todo store the term
 		this.maxTerm = ctx.term
 	}
 
 	if ctx.term == this.maxTerm {
-		go fn()
-	} else {
 		go func() {
-			ctx.errorChan <- errors.New("Old term")
+			result, err := fn()
+
+			if err != nil {
+				ctx.errorChan <- err
+			} else {
+				ctx.responseChan <- result
+			}
 		}()
+
+		return nil
+	} else {
+		oldTermError := errors.New("Old Term")
+		go func() {
+			ctx.errorChan <- oldTermError
+		}()
+
+		return oldTermError
 	}
 }
 
@@ -130,10 +154,12 @@ type requestContext struct {
 	responseChan chan interface{}
 }
 
-func (this *NodeFSM) sendToStateHandler(term uint32, request interface{}, responseChan interface{}) {
-	_, handler := this.getCurrent()
+func (this *NodeFSM) sendInternalEvent(event interface{}) {
+	this.internalCh <- event
+}
 
-	handler.ch <- requestContext{
+func (this *NodeFSM) sendToStateHandler(term uint32, request interface{}, responseChan interface{}) {
+	this.requestCh <- requestContext{
 		term:         term,
 		request:      request,
 		errorChan:    make(chan error),
@@ -156,4 +182,8 @@ func toChan(in interface{}) chan interface{} {
 		}
 	}()
 	return out
+}
+
+func (this *NodeFSM) OnKeepAliveTimeout(timeout *KeepAliveTimeout) {
+	this.sendInternalEvent(timeout)
 }
