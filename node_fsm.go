@@ -25,8 +25,8 @@ type NodeFSM struct {
 	maxTerm      uint32
 
 	fsm        map[state]stateHandler
-	requestCh  chan requestContext
-	internalCh chan interface{} // internal events where no response is needed
+	rpcCh      chan rpcContext
+	internalCh chan internalRequest // internal events where no response is needed
 }
 
 type state int
@@ -63,30 +63,64 @@ func (this *NodeFSM) candidateHandler(candidate *Candidate) stateHandler {
 	return stateHandler{}
 }
 
-func (this *NodeFSM) followerHandler(follower *Follower) stateHandler {
-	transition := func() state {
+func (this *NodeFSM) commonTransition(internalRequestFn func(internalRequest) state,
+	rpcContextFn func(rpcContext) state,
+	oldTermState state) func() state {
 
-		select {
-		case internalEvent := <-this.internalCh:
-			fmt.Println(internalEvent)
-			return invalidState
-		case reqCtx := <-this.requestCh:
-			nextState, responseFn := func() (state, func() (interface{}, error)) {
-				switch r := reqCtx.request.(type) {
+	return func() state {
 
-				case *rpc.VoteRequest:
-					return followerState, func() (interface{}, error) { return follower.requestVote(r) }
-				}
-
-				return invalidState, invalidResponseFn
-			}()
-
-			this.processAsync(reqCtx, responseFn)
-
-			return nextState
+		isOldTerm := func(term uint32) bool {
+			if term > this.maxTerm { // do this outside of the go routine for sync purposes
+				// todo store the term
+				this.maxTerm = term
+				return false
+			} else {
+				return true
+			}
 		}
 
+		select {
+		case internalRequest := <-this.internalCh:
+			if isOldTerm(internalRequest.term) {
+				// just log
+				return oldTermState
+			} else {
+				return internalRequestFn(internalRequest)
+			}
+
+		case rpcCtx := <-this.rpcCh:
+			if isOldTerm(rpcCtx.term) {
+				rpcCtx.errorChan <- errors.New("Old Term")
+				return oldTermState
+			} else {
+				return rpcContextFn(rpcCtx)
+			}
+		}
 	}
+}
+
+func (this *NodeFSM) followerHandler(follower *Follower) stateHandler {
+	transition := this.commonTransition(
+		func(internalReq internalRequest) state {
+			switch internalReq.request.(type) {
+			case *KeepAliveTimeout:
+				return leaderState
+			default:
+				return invalidState
+			}
+
+			return candidateState
+		},
+		func(rpcCtx rpcContext) state {
+			switch req := rpcCtx.rpc.(type) {
+			case *rpc.VoteRequest:
+				follower.requestVote(req)
+				return followerState
+			default:
+				return invalidState
+			}
+		},
+		followerState)
 
 	return stateHandler{
 		service:    follower,
@@ -119,49 +153,41 @@ func (this *NodeFSM) Start() {
 	}()
 }
 
-func (this *NodeFSM) processAsync(ctx requestContext, fn func() (interface{}, error)) error {
-	if ctx.term > this.maxTerm { // do this outside of the go routine for sync purposes
-		// todo store the term
-		this.maxTerm = ctx.term
-	}
+func (this *NodeFSM) processAsync(ctx rpcContext, fn func() (interface{}, error)) {
+	go func() {
+		result, err := fn()
 
-	if ctx.term == this.maxTerm {
-		go func() {
-			result, err := fn()
-
-			if err != nil {
-				ctx.errorChan <- err
-			} else {
-				ctx.responseChan <- result
-			}
-		}()
-
-		return nil
-	} else {
-		oldTermError := errors.New("Old Term")
-		go func() {
-			ctx.errorChan <- oldTermError
-		}()
-
-		return oldTermError
-	}
+		if err != nil {
+			ctx.errorChan <- err
+		} else {
+			ctx.responseChan <- result
+		}
+	}()
 }
 
-type requestContext struct {
+type internalRequest struct {
+	term    uint32
+	request interface{}
+}
+
+type rpcContext struct {
 	term         uint32
-	request      interface{}
+	rpc          interface{}
 	errorChan    chan error
 	responseChan chan interface{}
 }
 
-func (this *NodeFSM) sendInternalEvent(event interface{}) {
-	this.internalCh <- event
+func (this *NodeFSM) sendInternalRequest(term uint32, request interface{}) {
+	this.internalCh <- internalRequest{
+		term:    term,
+		request: request,
+	}
 }
 
-func (this *NodeFSM) sendToStateHandler(term uint32, request interface{}, responseChan interface{}) {
-	this.requestCh <- requestContext{
+func (this *NodeFSM) sendToStateHandler(term uint32, rpc interface{}, responseChan interface{}) {
+	this.rpcCh <- rpcContext{
 		term:         term,
-		request:      request,
+		rpc:          rpc,
 		errorChan:    make(chan error),
 		responseChan: toChan(responseChan),
 	}
@@ -185,5 +211,5 @@ func toChan(in interface{}) chan interface{} {
 }
 
 func (this *NodeFSM) OnKeepAliveTimeout(timeout *KeepAliveTimeout) {
-	this.sendInternalEvent(timeout)
+	this.sendInternalRequest(timeout.term, timeout)
 }
