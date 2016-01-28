@@ -20,7 +20,7 @@ type CandidateListener interface {
 	quorumObtained(term uint32)
 }
 
-func (h *Candidate) start(term uint32) error {
+func (h *Candidate) Start(term uint32) error {
 	var currentVoteCount uint32 = 0
 
 	go func() {
@@ -40,6 +40,6 @@ func (h *Candidate) start(term uint32) error {
 	return nil
 }
 
-func (h *Candidate) stop() error {
+func (h *Candidate) Stop() error {
 	return nil
 }
