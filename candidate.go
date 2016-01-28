@@ -12,7 +12,7 @@ type BaseEvent struct {
 
 type Candidate struct {
 	quorum   QuorumStrategy
-	listener CandidateListener
+	Listener CandidateListener
 	client   Client
 }
 
@@ -31,7 +31,7 @@ func (h *Candidate) Start(term uint32) error {
 				currentVoteCount++
 				if h.quorum.obtained(currentVoteCount) {
 					// todo close responseChan
-					h.listener.quorumObtained(term)
+					h.Listener.quorumObtained(term)
 				}
 			}
 		}

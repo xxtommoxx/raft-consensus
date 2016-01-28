@@ -13,12 +13,8 @@ const (
 	Reset
 )
 
-type KeepAliveTimeout struct {
-	term uint32
-}
-
 type FollowerListener interface {
-	OnKeepAliveTimeout(timeout *KeepAliveTimeout)
+	OnKeepAliveTimeout(term uint32)
 }
 
 type Follower struct {
@@ -74,7 +70,7 @@ func (h *Follower) Start(term uint32) error {
 			*/
 			case <-timer.C:
 				if h.Listener != nil {
-					h.Listener.OnKeepAliveTimeout(&KeepAliveTimeout{term})
+					h.Listener.OnKeepAliveTimeout(term)
 				}
 			}
 		}

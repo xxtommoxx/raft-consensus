@@ -8,7 +8,22 @@ import (
 )
 
 var _ = fmt.Printf
-var _ = &rpc.VoteRequest{}
+
+type state int
+
+const (
+	leaderState state = iota
+	followerState
+	candidateState
+	invalidState
+)
+
+type internalEvent int
+
+const (
+	leaderTimeout internalEvent = iota
+	quorumObtained
+)
 
 /**
 	An fsm that contains three states -- leader, follower and candidate.
@@ -29,23 +44,14 @@ type NodeFSM struct {
 	internalCh chan internalRequest // internal events where no response is needed
 }
 
-type state int
-
-const (
-	leaderState state = iota
-	followerState
-	candidateState
-	invalidState
-)
-
 type stateHandler struct {
 	service    Service
 	transition func() state
 }
 
 type internalRequest struct {
-	term    uint32
-	request interface{}
+	term  uint32
+	event internalEvent
 }
 
 type rpcContext struct {
@@ -75,13 +81,15 @@ func (this *NodeFSM) candidateHandler(candidate *Candidate) stateHandler {
 	transition := this.commonTransitionFor(
 		candidateState,
 		func(internalReq internalRequest) state {
-			switch internalReq.request.(type) {
+			switch internalReq.event {
+			case quorumObtained:
+				return leaderState
 			default:
 				return invalidState
 			}
 		},
 		func(rpcCtx rpcContext) state {
-			switch req := rpcCtx.rpc.(type) {
+			switch rpcCtx.rpc.(type) {
 			default:
 				return invalidState
 			}
@@ -97,8 +105,8 @@ func (this *NodeFSM) followerHandler(follower *Follower) stateHandler {
 	transition := this.commonTransitionFor(
 		followerState,
 		func(internalReq internalRequest) state {
-			switch internalReq.request.(type) {
-			case *KeepAliveTimeout:
+			switch internalReq.event {
+			case leaderTimeout:
 				this.maxTerm = this.maxTerm + 1
 				return candidateState
 			default:
@@ -213,10 +221,10 @@ func (this *NodeFSM) processAsync(ctx rpcContext, fn func() (interface{}, error)
 	}()
 }
 
-func (this *NodeFSM) sendInternalRequest(term uint32, request interface{}) {
+func (this *NodeFSM) sendInternalRequest(term uint32, ie internalEvent) {
 	this.internalCh <- internalRequest{
-		term:    term,
-		request: request,
+		term:  term,
+		event: ie,
 	}
 }
 
@@ -246,6 +254,10 @@ func toChan(in interface{}) chan interface{} {
 	return out
 }
 
-func (this *NodeFSM) OnKeepAliveTimeout(timeout *KeepAliveTimeout) {
-	this.sendInternalRequest(timeout.term, timeout)
+func (this *NodeFSM) OnKeepAliveTimeout(term uint32) {
+	this.sendInternalRequest(term, leaderTimeout)
+}
+
+func (this *NodeFSM) quorumObtained(term uint32) {
+	this.sendInternalRequest(term, quorumObtained)
 }
