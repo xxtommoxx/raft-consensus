@@ -2,12 +2,9 @@ package raft
 
 import (
 	"errors"
-	"fmt"
 	"github.com/xxtommoxx/raft-consensus/rpc"
 	"reflect"
 )
-
-var _ = fmt.Printf
 
 type state int
 
@@ -37,11 +34,12 @@ const (
 **/
 type NodeFSM struct {
 	currentState state
-	maxTerm      uint32
 
 	fsm        map[state]stateHandler
 	rpcCh      chan rpcContext
 	internalCh chan internalRequest // internal events where no response is needed
+
+	stateStore StateStore
 }
 
 type stateHandler struct {
@@ -61,10 +59,12 @@ type rpcContext struct {
 	responseChan chan interface{}
 }
 
-func NewNodeFSM(follower *Follower, candidate *Candidate) *NodeFSM {
+func NewNodeFSM(follower *Follower, candidate *Candidate, stateStore StateStore) *NodeFSM {
 	// todo read maxterm from store
+
 	nodeFSM := &NodeFSM{
 		currentState: followerState,
+		stateStore:   stateStore,
 	}
 
 	fsm := map[state]stateHandler{
@@ -73,6 +73,8 @@ func NewNodeFSM(follower *Follower, candidate *Candidate) *NodeFSM {
 	}
 
 	nodeFSM.fsm = fsm
+	follower.Listener = nodeFSM
+	candidate.Listener = nodeFSM
 
 	return nodeFSM
 }
@@ -107,7 +109,6 @@ func (this *NodeFSM) followerHandler(follower *Follower) stateHandler {
 		func(internalReq internalRequest) state {
 			switch internalReq.event {
 			case leaderTimeout:
-				this.maxTerm = this.maxTerm + 1
 				return candidateState
 			default:
 				return invalidState
@@ -116,7 +117,7 @@ func (this *NodeFSM) followerHandler(follower *Follower) stateHandler {
 		func(rpcCtx rpcContext) state {
 			switch req := rpcCtx.rpc.(type) {
 			case *rpc.VoteRequest:
-				this.processAsync(rpcCtx, func() (interface{}, error) { return follower.requestVote(req) })
+				this.processAsync(rpcCtx, func() (interface{}, error) { return follower.RequestVote(req) })
 				return followerState
 			default:
 				return invalidState
@@ -127,6 +128,15 @@ func (this *NodeFSM) followerHandler(follower *Follower) stateHandler {
 		service:    follower,
 		transition: transition,
 	}
+}
+
+func (this *NodeFSM) getTerm() uint32 {
+	return this.stateStore.CurrentTerm()
+}
+
+// precondition term must be > maxTerm
+func (this *NodeFSM) setTerm(term uint32) {
+	this.stateStore.SaveCurrentTerm(term)
 }
 
 // Helper function that reads from the internal channel and rpc channel.
@@ -149,9 +159,10 @@ func (this *NodeFSM) commonTransitionFor(_state state, internalReqFn func(intern
 			}
 		}
 
-		if term > this.maxTerm {
-			// TODO store
-			this.maxTerm = term
+		currentTerm := this.getTerm()
+
+		if term > currentTerm {
+			this.setTerm(term)
 
 			if this.currentState != followerState {
 				gt()
@@ -159,7 +170,7 @@ func (this *NodeFSM) commonTransitionFor(_state state, internalReqFn func(intern
 			} else {
 				return handleEq()
 			}
-		} else if term < this.maxTerm {
+		} else if term < currentTerm {
 			lt()
 			return _state
 		} else {
@@ -195,7 +206,7 @@ func (this *NodeFSM) Start() {
 			if nextState != currentState {
 				currentStateHandler.service.Stop()
 				this.currentState = nextState
-				this.fsm[nextState].service.Start(this.maxTerm)
+				this.fsm[nextState].service.Start()
 			}
 		}
 	}()
@@ -229,12 +240,14 @@ func (this *NodeFSM) sendInternalRequest(term uint32, ie internalEvent) {
 }
 
 func (this *NodeFSM) sendToStateHandler(term uint32, rpc interface{}, responseChan interface{}) {
-	this.rpcCh <- rpcContext{
-		term:         term,
-		rpc:          rpc,
-		errorChan:    make(chan error),
-		responseChan: toChan(responseChan),
-	}
+	go func() {
+		this.rpcCh <- rpcContext{
+			term:         term,
+			rpc:          rpc,
+			errorChan:    make(chan error),
+			responseChan: toChan(responseChan),
+		}
+	}()
 }
 
 func toChan(in interface{}) chan interface{} {
@@ -258,6 +271,6 @@ func (this *NodeFSM) OnKeepAliveTimeout(term uint32) {
 	this.sendInternalRequest(term, leaderTimeout)
 }
 
-func (this *NodeFSM) quorumObtained(term uint32) {
+func (this *NodeFSM) QuorumObtained(term uint32) {
 	this.sendInternalRequest(term, quorumObtained)
 }

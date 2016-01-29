@@ -24,21 +24,21 @@ type Follower struct {
 	keepAlive    chan int
 	random       *rand.Rand
 
-	votedForId   string
-	votedForTerm uint32
-
-	mutex *sync.Mutex
+	stateStore StateStore
+	mutex      *sync.Mutex
 }
 
-func NewInstance() *Follower {
-	return &Follower{}
+func NewInstance(stateStore StateStore) *Follower {
+	return &Follower{
+		stateStore: stateStore,
+	}
 }
 
 func (h *Follower) leaderTimeout() time.Duration {
 	return time.Duration(h.random.Int63n(h.timeoutRange)+h.timeout.MinMillis) * time.Millisecond
 }
 
-func (h *Follower) Start(term uint32) error {
+func (h *Follower) Start() error {
 	fmt.Println("Starting follower")
 
 	go func() {
@@ -70,7 +70,7 @@ func (h *Follower) Start(term uint32) error {
 			*/
 			case <-timer.C:
 				if h.Listener != nil {
-					h.Listener.OnKeepAliveTimeout(term)
+					h.Listener.OnKeepAliveTimeout(h.stateStore.CurrentTerm())
 				}
 			}
 		}
@@ -87,16 +87,15 @@ func (h *Follower) Stop() error {
 	return nil
 }
 
-func (this *Follower) requestVote(req *rpc.VoteRequest) (bool, error) {
+func (this *Follower) RequestVote(req *rpc.VoteRequest) (bool, error) {
 	this.mutex.Lock()
 	defer this.mutex.Unlock()
 
-	if this.votedForTerm < req.Term { // TODO: all need to check log entry
-		// todo store this
-		this.votedForTerm = req.Term
-		this.votedForId = req.CandidateId
+	votedFor := this.stateStore.VotedFor()
+	if votedFor == nil || votedFor.Term < req.Term {
+		vote := &Vote{req.Term, req.CandidateId}
+		this.stateStore.SaveVote(vote)
 		return true, nil
 	}
-
 	return false, nil
 }

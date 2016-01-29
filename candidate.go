@@ -14,14 +14,17 @@ type Candidate struct {
 	quorum   QuorumStrategy
 	Listener CandidateListener
 	client   Client
+
+	stateStore StateStore
 }
 
 type CandidateListener interface {
-	quorumObtained(term uint32)
+	QuorumObtained(term uint32)
 }
 
-func (h *Candidate) Start(term uint32) error {
+func (h *Candidate) Start() error {
 	var currentVoteCount uint32 = 0
+	currentTerm := h.stateStore.CurrentTerm()
 
 	go func() {
 		responseChan := h.client.sendRequestVote()
@@ -31,7 +34,7 @@ func (h *Candidate) Start(term uint32) error {
 				currentVoteCount++
 				if h.quorum.obtained(currentVoteCount) {
 					// todo close responseChan
-					h.Listener.quorumObtained(term)
+					h.Listener.QuorumObtained(currentTerm)
 				}
 			}
 		}
