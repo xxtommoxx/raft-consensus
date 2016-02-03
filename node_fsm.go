@@ -59,9 +59,7 @@ type rpcContext struct {
 	responseChan chan interface{}
 }
 
-func NewNodeFSM(follower *Follower, candidate *Candidate, stateStore StateStore) *NodeFSM {
-	// todo read maxterm from store
-
+func NewNodeFSM(stateStore StateStore, candidate *Candidate, follower *Follower) *NodeFSM {
 	nodeFSM := &NodeFSM{
 		currentState: followerState,
 		stateStore:   stateStore,
@@ -73,9 +71,8 @@ func NewNodeFSM(follower *Follower, candidate *Candidate, stateStore StateStore)
 	}
 
 	nodeFSM.fsm = fsm
-	follower.Listener = nodeFSM
-	candidate.Listener = nodeFSM
-
+	candidate.SetListener(nodeFSM)
+	follower.SetListener(nodeFSM)
 	return nodeFSM
 }
 

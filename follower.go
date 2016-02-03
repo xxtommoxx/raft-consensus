@@ -17,9 +17,13 @@ type FollowerListener interface {
 	OnKeepAliveTimeout(term uint32)
 }
 
+type noopFollowerListener struct{}
+
+func (n *noopFollowerListener) OnKeepAliveTimeout(term uint32) {}
+
 type Follower struct {
 	timeout      LeaderTimeout
-	Listener     FollowerListener
+	listener     FollowerListener
 	timeoutRange int64
 	keepAlive    chan int
 	random       *rand.Rand
@@ -28,10 +32,16 @@ type Follower struct {
 	mutex      *sync.Mutex
 }
 
-func NewInstance(stateStore StateStore) *Follower {
+func NewFollower(stateStore StateStore, timeout LeaderTimeout) *Follower {
 	return &Follower{
+		listener:   &noopFollowerListener{},
 		stateStore: stateStore,
+		timeout:    timeout,
 	}
+}
+
+func (h *Follower) SetListener(listener FollowerListener) {
+	h.listener = listener
 }
 
 func (h *Follower) leaderTimeout() time.Duration {
@@ -69,9 +79,7 @@ func (h *Follower) Start() error {
 				send Reset
 			*/
 			case <-timer.C:
-				if h.Listener != nil {
-					h.Listener.OnKeepAliveTimeout(h.stateStore.CurrentTerm())
-				}
+				h.listener.OnKeepAliveTimeout(h.stateStore.CurrentTerm())
 			}
 		}
 	}()
