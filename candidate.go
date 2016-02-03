@@ -1,14 +1,10 @@
 package raft
 
-type Client interface {
-	sendRequestVote() <-chan VoteResponse
-}
-
 type VoteResponse struct{}
 
-type BaseEvent struct {
-	term uint32
-}
+const (
+	stopVote = iota
+)
 
 type Candidate struct {
 	quorum   QuorumStrategy
@@ -16,6 +12,7 @@ type Candidate struct {
 	client   Client
 
 	stateStore StateStore
+	voteCh     chan int
 }
 
 type CandidateListener interface {
@@ -44,13 +41,16 @@ func (h *Candidate) Start() error {
 	currentTerm := h.stateStore.CurrentTerm()
 
 	go func() {
-		responseChan := h.client.sendRequestVote()
+		cancelChan := make(chan struct{})
+		responseChan := h.client.sendRequestVote(cancelChan)
 		for {
 			select {
+			case <-h.voteCh:
+				close(cancelChan)
 			case <-responseChan:
 				currentVoteCount++
 				if h.quorum.obtained(currentVoteCount) {
-					// todo close responseChan
+					close(cancelChan)
 					h.listener.QuorumObtained(currentTerm)
 				}
 			}
@@ -61,5 +61,6 @@ func (h *Candidate) Start() error {
 }
 
 func (h *Candidate) Stop() error {
+	h.voteCh <- stopVote
 	return nil
 }

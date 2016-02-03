@@ -236,7 +236,7 @@ func (this *NodeFSM) sendInternalRequest(term uint32, ie internalEvent) {
 	}
 }
 
-func (this *NodeFSM) sendToStateHandler(term uint32, rpc interface{}, responseChan interface{}) {
+func (this *NodeFSM) sendRpcRequest(term uint32, rpc interface{}, responseChan interface{}) {
 	go func() {
 		this.rpcCh <- rpcContext{
 			term:         term,

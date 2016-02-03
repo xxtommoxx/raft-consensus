@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	Close = iota
-	Reset
+	timerStop = iota
+	timerReset
 )
 
 type FollowerListener interface {
@@ -61,22 +61,23 @@ func (h *Follower) Start() error {
 		for {
 			select {
 			case timerEvent := <-h.keepAlive:
-				if timerEvent == Close {
+				if timerEvent == timerStop {
 					fmt.Println("Terminating leader election timer")
 					timer.Stop()
 					return
 				}
 
-				if timerEvent == Reset {
+				if timerEvent == timerReset {
 					duration := h.leaderTimeout()
 					if !timer.Reset(duration) {
 						timer = time.NewTimer(duration)
 					}
 				}
 			/*
-				TODO: a race condition is possible whereby a request was just
+				a race condition is possible whereby a request was just
 				received before the timer just expired but it was scheduled out before it had a chance to
-				send Reset
+				send Reset. This window is small if the timeout is >> than the time between new requests.
+				It is assumed that each request is handled in a go routine.
 			*/
 			case <-timer.C:
 				h.listener.OnKeepAliveTimeout(h.stateStore.CurrentTerm())
@@ -89,13 +90,19 @@ func (h *Follower) Start() error {
 
 func (h *Follower) Stop() error {
 	if h.keepAlive != nil {
-		h.keepAlive <- Close
+		h.keepAlive <- timerStop
 	}
 
 	return nil
 }
 
+func (h *Follower) resetTimer() {
+	h.keepAlive <- timerReset
+}
+
 func (this *Follower) RequestVote(req *rpc.VoteRequest) (bool, error) {
+	this.resetTimer()
+
 	this.mutex.Lock()
 	defer this.mutex.Unlock()
 
