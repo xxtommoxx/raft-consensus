@@ -5,6 +5,7 @@ import (
 	"github.com/xxtommoxx/raft-consensus/rpc"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,9 +28,12 @@ type Follower struct {
 	timeoutRange int64
 	keepAlive    chan int
 	random       *rand.Rand
+	isStopping   bool
+	requestCount uint64
 
 	stateStore StateStore
-	mutex      *sync.Mutex
+	voteMutex  *sync.Mutex
+	timerMutex *sync.Mutex
 }
 
 func NewFollower(stateStore StateStore, timeout LeaderTimeout) *Follower {
@@ -58,6 +62,8 @@ func (h *Follower) Start() error {
 		timer := time.NewTimer(h.leaderTimeout())
 		defer timer.Stop()
 
+		var reqCountSinceReset uint64 = atomic.LoadUint64(&h.requestCount)
+
 		for {
 			select {
 			case timerEvent := <-h.keepAlive:
@@ -68,19 +74,19 @@ func (h *Follower) Start() error {
 				}
 
 				if timerEvent == timerReset {
+					reqCountSinceReset = atomic.LoadUint64(&h.requestCount)
+
 					duration := h.leaderTimeout()
 					if !timer.Reset(duration) {
 						timer = time.NewTimer(duration)
 					}
 				}
-			/*
-				a race condition is possible whereby a request was just
-				received before the timer just expired but it was scheduled out before it had a chance to
-				send Reset. This window is small if the timeout is >> than the time between new requests.
-				It is assumed that each request is handled in a go routine.
-			*/
 			case <-timer.C:
-				h.listener.OnKeepAliveTimeout(h.stateStore.CurrentTerm())
+				h.withTimerLock(func() {
+					if !h.isStopping && reqCountSinceReset == h.requestCount {
+						h.listener.OnKeepAliveTimeout(h.stateStore.CurrentTerm())
+					}
+				})
 			}
 		}
 	}()
@@ -89,22 +95,33 @@ func (h *Follower) Start() error {
 }
 
 func (h *Follower) Stop() error {
-	if h.keepAlive != nil {
+	h.withTimerLock(func() {
+		h.isStopping = true
 		h.keepAlive <- timerStop
-	}
-
+		h.requestCount = 0
+		h.isStopping = false
+	})
 	return nil
 }
 
 func (h *Follower) resetTimer() {
-	h.keepAlive <- timerReset
+	h.withTimerLock(func() {
+		h.requestCount = requestCount + 1
+		h.keepAlive <- timerReset
+	})
+}
+
+func (h *Follower) withTimerLock(fn func()) {
+	h.timerMutex.Lock()
+	h.timerMutex.Unlock()
+	fn()
 }
 
 func (this *Follower) RequestVote(req *rpc.VoteRequest) (bool, error) {
 	this.resetTimer()
 
-	this.mutex.Lock()
-	defer this.mutex.Unlock()
+	this.voteMutex.Lock()
+	defer this.voteMutex.Unlock()
 
 	votedFor := this.stateStore.VotedFor()
 	if votedFor == nil || votedFor.Term < req.Term {
