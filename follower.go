@@ -20,25 +20,25 @@ type FollowerListener interface {
 
 type noopFollowerListener struct{}
 
-func (n *noopFollowerListener) OnKeepAliveTimeout(term uint32) {}
+func (n noopFollowerListener) OnKeepAliveTimeout(term uint32) {}
 
 type Follower struct {
 	timeout      LeaderTimeout
 	listener     FollowerListener
 	timeoutRange int64
 	keepAlive    chan int
-	random       *rand.Rand
+	random       rand.Rand
 	isStopping   bool
 	requestCount uint64
 
 	stateStore StateStore
-	voteMutex  *sync.Mutex
-	timerMutex *sync.Mutex
+	voteMutex  sync.Mutex
+	timerMutex sync.Mutex
 }
 
 func NewFollower(stateStore StateStore, timeout LeaderTimeout) *Follower {
 	return &Follower{
-		listener:   &noopFollowerListener{},
+		listener:   noopFollowerListener{},
 		stateStore: stateStore,
 		timeout:    timeout,
 	}
@@ -106,7 +106,7 @@ func (h *Follower) Stop() error {
 
 func (h *Follower) resetTimer() {
 	h.withTimerLock(func() {
-		h.requestCount = requestCount + 1
+		h.requestCount++
 		h.keepAlive <- timerReset
 	})
 }
@@ -125,8 +125,8 @@ func (this *Follower) RequestVote(req *rpc.VoteRequest) (bool, error) {
 
 	votedFor := this.stateStore.VotedFor()
 	if votedFor == nil || votedFor.Term < req.Term {
-		vote := &Vote{req.Term, req.CandidateId}
-		this.stateStore.SaveVote(vote)
+		vote := Vote{req.Term, req.CandidateId}
+		this.stateStore.SaveVote(&vote)
 		return true, nil
 	}
 	return false, nil

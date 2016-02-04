@@ -1,46 +1,31 @@
 package raft
 
 import (
-	"sync"
+	"sync/atomic"
 )
 
 // Mainly for testing
 type InMemoryStateStore struct {
 	currentTerm uint32
-	vote        *Vote
-	mutex       *sync.Mutex
+	vote        atomic.Value
 }
 
 func NewInMemoryStateStore() *InMemoryStateStore {
-	return &InMemoryStateStore{
-		mutex: &sync.Mutex{},
-	}
+	return &InMemoryStateStore{}
 }
 
 func (s *InMemoryStateStore) CurrentTerm() uint32 {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	return s.currentTerm
+	return atomic.LoadUint32(&s.currentTerm)
 }
 
 func (s *InMemoryStateStore) SaveCurrentTerm(term uint32) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	s.currentTerm = term
+	atomic.StoreUint32(&s.currentTerm, term)
 }
 
 func (s *InMemoryStateStore) VotedFor() *Vote {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	return s.vote
+	return s.vote.Load().(*Vote)
 }
 
 func (s *InMemoryStateStore) SaveVotedFor(vote *Vote) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-
-	s.vote = vote
+	s.vote.Store(vote)
 }
