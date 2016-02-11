@@ -20,113 +20,108 @@ type FollowerListener interface {
 
 type noopFollowerListener struct{}
 
-func (n noopFollowerListener) OnKeepAliveTimeout(term uint32) {}
+func (noopFollowerListener) OnKeepAliveTimeout(term uint32) {}
 
 type Follower struct {
+	*SyncService
+
 	timeout      LeaderTimeout
 	listener     FollowerListener
 	timeoutRange int64
 	keepAlive    chan int
 	random       rand.Rand
-	isStopping   bool
 	requestCount uint64
 
 	stateStore StateStore
 	voteMutex  sync.Mutex
-	timerMutex sync.Mutex
 }
 
 func NewFollower(stateStore StateStore, timeout LeaderTimeout) *Follower {
-	return &Follower{
+	follower := &Follower{
 		listener:   noopFollowerListener{},
 		stateStore: stateStore,
 		timeout:    timeout,
 	}
+
+	syncService := NewSyncService(follower.syncStart, follower.startBackGroundTimer, follower.syncStop)
+	follower.SyncService = syncService
+
+	return follower
 }
 
 func (h *Follower) SetListener(listener FollowerListener) {
 	h.listener = listener
 }
 
+func (f *Follower) syncStart() error {
+	fmt.Println("Starting follower")
+	return nil
+}
+
+func (f *Follower) startBackGroundTimer() {
+	fmt.Println("Starting follower timer")
+
+	f.keepAlive = make(chan int)
+	defer close(f.keepAlive)
+
+	timer := time.NewTimer(f.leaderTimeout())
+
+	var reqCountSinceReset uint64 = atomic.LoadUint64(&f.requestCount)
+
+	for {
+		select {
+		case timerEvent := <-f.keepAlive:
+			if timerEvent == timerStop {
+				fmt.Println("Terminating leader election timer")
+				timer.Stop()
+				f.wg.Done()
+				return
+			}
+
+			if timerEvent == timerReset {
+				reqCountSinceReset = atomic.LoadUint64(&f.requestCount)
+
+				duration := f.leaderTimeout()
+				if !timer.Reset(duration) {
+					timer = time.NewTimer(duration)
+				}
+			}
+		case <-timer.C:
+			f.withMutex(func() {
+				if f.serviceState == Started && reqCountSinceReset == f.requestCount {
+					f.listener.OnKeepAliveTimeout(f.stateStore.CurrentTerm())
+				}
+			})
+		}
+	}
+}
+
 func (h *Follower) leaderTimeout() time.Duration {
 	return time.Duration(h.random.Int63n(h.timeoutRange)+h.timeout.MinMillis) * time.Millisecond
 }
 
-func (h *Follower) Start() error {
-	fmt.Println("Starting follower")
-
-	go func() {
-		h.keepAlive = make(chan int)
-		defer close(h.keepAlive)
-
-		timer := time.NewTimer(h.leaderTimeout())
-		defer timer.Stop()
-
-		var reqCountSinceReset uint64 = atomic.LoadUint64(&h.requestCount)
-
-		for {
-			select {
-			case timerEvent := <-h.keepAlive:
-				if timerEvent == timerStop {
-					fmt.Println("Terminating leader election timer")
-					timer.Stop()
-					return
-				}
-
-				if timerEvent == timerReset {
-					reqCountSinceReset = atomic.LoadUint64(&h.requestCount)
-
-					duration := h.leaderTimeout()
-					if !timer.Reset(duration) {
-						timer = time.NewTimer(duration)
-					}
-				}
-			case <-timer.C:
-				h.withTimerLock(func() {
-					if !h.isStopping && reqCountSinceReset == h.requestCount {
-						h.listener.OnKeepAliveTimeout(h.stateStore.CurrentTerm())
-					}
-				})
-			}
-		}
-	}()
-
+func (f *Follower) syncStop() error {
+	f.keepAlive <- timerStop
+	f.requestCount = 0
 	return nil
 }
 
-func (h *Follower) Stop() error {
-	h.withTimerLock(func() {
-		h.isStopping = true
-		h.keepAlive <- timerStop
-		h.requestCount = 0
-		h.isStopping = false
-	})
-	return nil
-}
-
-func (h *Follower) resetTimer() {
-	h.withTimerLock(func() {
-		h.requestCount++
-		h.keepAlive <- timerReset
+func (f *Follower) resetTimer() {
+	f.withMutex(func() {
+		f.requestCount++
+		f.keepAlive <- timerReset
 	})
 }
 
-func (h *Follower) withTimerLock(fn func()) {
-	h.timerMutex.Lock()
-	h.timerMutex.Unlock()
-	fn()
-}
+// make a chan put on chan
 
-func (this *Follower) RequestVote(req *rpc.VoteRequest) (bool, error) {
-	this.resetTimer()
+func (f *Follower) RequestVote(req *rpc.VoteRequest) (bool, error) {
+	f.resetTimer()
 
-	this.voteMutex.Lock()
-	defer this.voteMutex.Unlock()
-
-	votedFor := this.stateStore.VotedFor()
+	votedFor := f.stateStore.VotedFor()
 	if votedFor == nil || votedFor.Term < req.Term {
 		vote := Vote{req.Term, req.CandidateId}
-		this.stateStore.SaveVote(&vote)
+		f.stateStore.SaveVote(&vote)
 		return true, nil
 	}
 	return false, nil
