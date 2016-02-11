@@ -113,8 +113,6 @@ func (f *Follower) resetTimer() {
 	})
 }
 
-// make a chan put on chan
-
 func (f *Follower) RequestVote(req *rpc.VoteRequest) (bool, error) {
 	f.resetTimer()
 

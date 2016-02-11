@@ -6,31 +6,9 @@ import (
 	"reflect"
 )
 
-type state int
-
-const (
-	leaderState state = iota
-	followerState
-	candidateState
-	invalidState
-)
-
-type internalEvent int
-
-const (
-	leaderTimeout internalEvent = iota
-	quorumObtained
-)
-
 /**
 	An fsm that contains three states -- leader, follower and candidate.
 	Each state has a non-buffered channel associated for sending incoming requests.
-	Since there's only one state active at a given point in time, no synchronization is required (in most cases)
-	for managing the FSM. I.e. no synchronization is required when storing the max term.
-
-	In most cases, doing the actual work for a given request can happen concurrently as long as it doesn't make
-	the fsm transition to another state. For all requests we can quickly know what the next will be without
-	doing the work that might take some time.
 **/
 type NodeFSM struct {
 	currentState state
@@ -39,8 +17,19 @@ type NodeFSM struct {
 	rpcCh      chan rpcContext
 	internalCh chan internalRequest // internal events where no response is needed
 
+	termCh chan uint32
+
 	stateStore StateStore
 }
+
+type state int
+
+const (
+	leaderState state = iota
+	followerState
+	candidateState
+	invalidState
+)
 
 type stateHandler struct {
 	service    Service
@@ -52,6 +41,13 @@ type internalRequest struct {
 	event internalEvent
 }
 
+const (
+	leaderTimeout internalEvent = iota
+	quorumObtained
+)
+
+type internalEvent int
+
 type rpcContext struct {
 	term         uint32
 	rpc          interface{}
@@ -59,7 +55,7 @@ type rpcContext struct {
 	responseChan chan interface{}
 }
 
-func NewNodeFSM(stateStore StateStore, candidate *Candidate, follower *Follower) *NodeFSM {
+func NewNodeFSM(stateStore StateStore, candidate *Candidate, follower *Follower, leader *Leader) *NodeFSM {
 	nodeFSM := &NodeFSM{
 		currentState: followerState,
 		stateStore:   stateStore,
@@ -68,11 +64,14 @@ func NewNodeFSM(stateStore StateStore, candidate *Candidate, follower *Follower)
 	fsm := map[state]stateHandler{
 		followerState:  nodeFSM.followerHandler(follower),
 		candidateState: nodeFSM.candidateHandler(candidate),
+		leaderState:    nodeFSM.leaderHandler(leader),
 	}
 
 	nodeFSM.fsm = fsm
+
 	candidate.SetListener(nodeFSM)
 	follower.SetListener(nodeFSM)
+
 	return nodeFSM
 }
 
@@ -96,6 +95,28 @@ func (this *NodeFSM) candidateHandler(candidate *Candidate) stateHandler {
 
 	return stateHandler{
 		service:    candidate,
+		transition: transition,
+	}
+}
+
+func (this *NodeFSM) leaderHandler(leader *Leader) stateHandler {
+	transition := this.commonTransitionFor(
+		leaderState,
+		func(internalReq internalRequest) state {
+			switch internalReq.event {
+			default:
+				return invalidState
+			}
+		},
+		func(rpcCtx rpcContext) state {
+			switch rpcCtx.rpc.(type) {
+			default:
+				return invalidState
+			}
+		})
+
+	return stateHandler{
+		service:    leader,
 		transition: transition,
 	}
 }
@@ -127,15 +148,6 @@ func (this *NodeFSM) followerHandler(follower *Follower) stateHandler {
 	}
 }
 
-func (this *NodeFSM) getTerm() uint32 {
-	return this.stateStore.CurrentTerm()
-}
-
-// precondition term must be > maxTerm
-func (this *NodeFSM) setTerm(term uint32) {
-	this.stateStore.SaveCurrentTerm(term)
-}
-
 // Helper function that reads from the internal channel and rpc channel.
 // Handles the term number encountered so that the passed in functions need not
 // be concerned about checking the term number to determine whether or not it can handle it.
@@ -156,23 +168,21 @@ func (this *NodeFSM) commonTransitionFor(_state state, internalReqFn func(intern
 			}
 		}
 
-		currentTerm := this.getTerm()
+		currentTerm := this.stateStore.CurrentTerm()
 
 		if term > currentTerm {
-			this.setTerm(term)
+			this.termCh <- term
 
-			if this.currentState != followerState {
+			if this.currentState != followerState { // revert to follower if higher term seen for leader and candidate
 				gt()
 				return followerState
-			} else {
-				return handleEq()
 			}
 		} else if term < currentTerm {
 			lt()
 			return _state
-		} else {
-			return handleEq()
 		}
+
+		return handleEq()
 	}
 
 	return func() state {
@@ -202,6 +212,14 @@ func (this *NodeFSM) Start() {
 
 			if nextState != currentState {
 				currentStateHandler.service.Stop()
+
+				// see if any greater term occurred while processing a request
+				select {
+				case newTerm := <-this.termCh:
+					this.stateStore.SaveCurrentTerm(newTerm)
+				default:
+				}
+
 				this.currentState = nextState
 				this.fsm[nextState].service.Start()
 			}
@@ -227,6 +245,14 @@ func (this *NodeFSM) processAsync(ctx rpcContext, fn func() (interface{}, error)
 			ctx.responseChan <- result
 		}
 	}()
+}
+
+func (this *NodeFSM) OnKeepAliveTimeout(term uint32) {
+	this.sendInternalRequest(term, leaderTimeout)
+}
+
+func (this *NodeFSM) QuorumObtained(term uint32) {
+	this.sendInternalRequest(term, quorumObtained)
 }
 
 func (this *NodeFSM) sendInternalRequest(term uint32, ie internalEvent) {
@@ -262,12 +288,4 @@ func toChan(in interface{}) chan interface{} {
 		}
 	}()
 	return out
-}
-
-func (this *NodeFSM) OnKeepAliveTimeout(term uint32) {
-	this.sendInternalRequest(term, leaderTimeout)
-}
-
-func (this *NodeFSM) QuorumObtained(term uint32) {
-	this.sendInternalRequest(term, quorumObtained)
 }
