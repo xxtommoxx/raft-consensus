@@ -1,4 +1,4 @@
-package util
+package common
 
 type Promise struct {
 	result interface{}

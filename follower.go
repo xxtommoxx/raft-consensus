@@ -2,6 +2,7 @@ package raft
 
 import (
 	"fmt"
+	"github.com/xxtommoxx/raft-consensus/common"
 	"github.com/xxtommoxx/raft-consensus/rpc"
 	"math/rand"
 	"sync"
@@ -23,7 +24,7 @@ type noopFollowerListener struct{}
 func (noopFollowerListener) OnKeepAliveTimeout(term uint32) {}
 
 type Follower struct {
-	*SyncService
+	*common.SyncService
 
 	timeout      LeaderTimeout
 	listener     FollowerListener
@@ -43,7 +44,7 @@ func NewFollower(stateStore StateStore, timeout LeaderTimeout) *Follower {
 		timeout:    timeout,
 	}
 
-	syncService := NewSyncService(follower.syncStart, follower.startBackGroundTimer, follower.syncStop)
+	syncService := common.NewSyncService(follower.syncStart, follower.startBackGroundTimer, follower.syncStop)
 	follower.SyncService = syncService
 
 	return follower
@@ -74,7 +75,6 @@ func (f *Follower) startBackGroundTimer() {
 			if timerEvent == timerStop {
 				fmt.Println("Terminating leader election timer")
 				timer.Stop()
-				f.wg.Done()
 				return
 			}
 
@@ -87,8 +87,8 @@ func (f *Follower) startBackGroundTimer() {
 				}
 			}
 		case <-timer.C:
-			f.withMutex(func() {
-				if f.serviceState == Started && reqCountSinceReset == f.requestCount {
+			f.WithMutex(func() {
+				if f.Status == common.Started && reqCountSinceReset == f.requestCount {
 					f.listener.OnKeepAliveTimeout(f.stateStore.CurrentTerm())
 				}
 			})
@@ -107,10 +107,14 @@ func (f *Follower) syncStop() error {
 }
 
 func (f *Follower) resetTimer() {
-	f.withMutex(func() {
+	f.WithMutex(func() {
 		f.requestCount++
 		f.keepAlive <- timerReset
 	})
+}
+
+func (f *Follower) KeepAliveRequest(req *rpc.KeepAliveRequest) {
+	f.resetTimer()
 }
 
 func (f *Follower) RequestVote(req *rpc.VoteRequest) (bool, error) {

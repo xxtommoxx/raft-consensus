@@ -1,4 +1,4 @@
-package raft
+package common
 
 import "sync"
 
@@ -10,14 +10,14 @@ type Service interface {
 type ServiceState int
 
 const (
-	Started = iota
+	Started ServiceState = iota
 	Stopped
 )
 
 type SyncService struct {
-	mutex        sync.Mutex
-	wg           sync.WaitGroup
-	serviceState ServiceState
+	mutex  sync.Mutex
+	wg     sync.WaitGroup
+	Status ServiceState
 
 	startFn           func() error
 	startBackgroundFn func()
@@ -36,12 +36,12 @@ func (s *SyncService) Stop() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.serviceState == Stopped {
+	if s.Status == Stopped {
 		return nil // TODO return error
 	} else {
 		stopRes := s.stopFn()
 		s.wg.Wait()
-		s.serviceState = Stopped
+		s.Status = Stopped
 		return stopRes
 	}
 }
@@ -50,7 +50,7 @@ func (s *SyncService) Start() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.serviceState == Started {
+	if s.Status == Started {
 		return nil // TODO return error
 	} else {
 		s.wg.Add(1)
@@ -62,15 +62,14 @@ func (s *SyncService) Start() error {
 			s.wg.Done()
 		}()
 
-		s.serviceState = Started
+		s.Status = Started
 		return startRes
 	}
 }
 
-func (s *SyncService) withMutex(fn func()) {
+func (s *SyncService) WithMutex(fn func()) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
 	fn()
-
 }

@@ -2,6 +2,7 @@ package raft
 
 import (
 	"errors"
+	"github.com/xxtommoxx/raft-consensus/common"
 	"github.com/xxtommoxx/raft-consensus/rpc"
 	"reflect"
 )
@@ -32,7 +33,7 @@ const (
 )
 
 type stateHandler struct {
-	service    Service
+	service    common.Service
 	transition func() state
 }
 

@@ -1,6 +1,9 @@
 package raft
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/xxtommoxx/raft-consensus/common"
+)
 
 type VoteResponse struct{}
 
@@ -9,7 +12,7 @@ const (
 )
 
 type Candidate struct {
-	*SyncService
+	*common.SyncService
 
 	quorum   QuorumStrategy
 	listener CandidateListener
@@ -34,7 +37,7 @@ func NewCandidate(stateStore StateStore, client Client, quorum QuorumStrategy) *
 		client:     client,
 		quorum:     quorum,
 	}
-	syncService := NewSyncService(c.syncStart, c.startVote, c.syncStop)
+	syncService := common.NewSyncService(c.syncStart, c.startVote, c.syncStop)
 	c.SyncService = syncService
 
 	return c

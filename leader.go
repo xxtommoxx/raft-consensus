@@ -2,11 +2,12 @@ package raft
 
 import (
 	"fmt"
+	"github.com/xxtommoxx/raft-consensus/common"
 	"time"
 )
 
 type Leader struct {
-	*SyncService
+	*common.SyncService
 
 	keepAliveMs time.Duration
 	stopCh      chan int
@@ -25,7 +26,7 @@ func NewLeader(keepAliveMs uint32, client Client) *Leader {
 		stopCh:      make(chan int),
 	}
 
-	syncService := NewSyncService(l.syncStart, l.startKeepAliveTimer, l.syncStop)
+	syncService := common.NewSyncService(l.syncStart, l.startKeepAliveTimer, l.syncStop)
 	l.SyncService = syncService
 
 	return l
@@ -46,8 +47,8 @@ func (l *Leader) startKeepAliveTimer() {
 				close(keepAliveCancelChan)
 			}
 		case <-timer.C:
-			l.withMutex(func() {
-				if l.serviceState != Stopped {
+			l.WithMutex(func() {
+				if l.Status != common.Stopped {
 					l.client.sendKeepAlive(keepAliveCancelChan)
 					timer = time.NewTimer(l.keepAliveMs)
 				}
