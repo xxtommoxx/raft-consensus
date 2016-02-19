@@ -3,6 +3,7 @@ package raft
 import (
 	"fmt"
 	"github.com/xxtommoxx/raft-consensus/common"
+	"github.com/xxtommoxx/raft-consensus/rpc"
 	"time"
 )
 
@@ -12,14 +13,14 @@ type Leader struct {
 	keepAliveMs time.Duration
 	stopCh      chan int
 
-	client Client
+	client rpc.Client
 }
 
 const (
 	stopLeaderTimer = iota
 )
 
-func NewLeader(keepAliveMs uint32, client Client) *Leader {
+func NewLeader(keepAliveMs uint32, client rpc.Client) *Leader {
 	l := &Leader{
 		keepAliveMs: time.Duration(keepAliveMs) * time.Millisecond,
 		client:      client,
@@ -48,7 +49,7 @@ func (l *Leader) startKeepAliveTimer() {
 		case <-timer.C:
 			l.WithMutex(func() {
 				if l.Status != common.Stopped {
-					l.client.sendKeepAlive(keepAliveCancelChan)
+					l.client.SendKeepAlive(keepAliveCancelChan)
 					timer = time.NewTimer(l.keepAliveMs)
 				}
 			})

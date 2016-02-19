@@ -3,6 +3,7 @@ package raft
 import (
 	"fmt"
 	"github.com/xxtommoxx/raft-consensus/common"
+	"github.com/xxtommoxx/raft-consensus/rpc"
 )
 
 type VoteResponse struct{}
@@ -16,7 +17,7 @@ type Candidate struct {
 
 	quorum   QuorumStrategy
 	listener CandidateListener
-	client   Client
+	client   rpc.Client
 
 	stateStore StateStore
 	voteCh     chan int
@@ -30,7 +31,7 @@ type noopCandidateListener struct{}
 
 func (n *noopCandidateListener) QuorumObtained(term uint32) {}
 
-func NewCandidate(stateStore StateStore, client Client, quorum QuorumStrategy) *Candidate {
+func NewCandidate(stateStore StateStore, client rpc.Client, quorum QuorumStrategy) *Candidate {
 	c := &Candidate{
 		stateStore: stateStore,
 		listener:   &noopCandidateListener{},
@@ -54,7 +55,7 @@ func (h *Candidate) startVote() {
 	var currentVoteCount uint32 = 0
 
 	cancelChan := make(chan struct{})
-	responseChan := h.client.sendRequestVote(cancelChan)
+	responseChan := h.client.SendRequestVote(cancelChan)
 
 	for {
 		select {
