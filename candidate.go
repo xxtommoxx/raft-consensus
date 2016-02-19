@@ -37,8 +37,8 @@ func NewCandidate(stateStore StateStore, client Client, quorum QuorumStrategy) *
 		client:     client,
 		quorum:     quorum,
 	}
-	syncService := common.NewSyncService(c.syncStart, c.startVote, c.syncStop)
-	c.SyncService = syncService
+
+	c.SyncService = common.NewSyncService(c.syncStart, c.startVote, c.syncStop)
 
 	return c
 }

@@ -44,8 +44,7 @@ func NewFollower(stateStore StateStore, timeout LeaderTimeout) *Follower {
 		timeout:    timeout,
 	}
 
-	syncService := common.NewSyncService(follower.syncStart, follower.startBackGroundTimer, follower.syncStop)
-	follower.SyncService = syncService
+	follower.SyncService = common.NewSyncService(follower.syncStart, follower.startBackGroundTimer, follower.syncStop)
 
 	return follower
 }

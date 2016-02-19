@@ -26,8 +26,7 @@ func NewLeader(keepAliveMs uint32, client Client) *Leader {
 		stopCh:      make(chan int),
 	}
 
-	syncService := common.NewSyncService(l.syncStart, l.startKeepAliveTimer, l.syncStop)
-	l.SyncService = syncService
+	l.SyncService = common.NewSyncService(l.syncStart, l.startKeepAliveTimer, l.syncStop)
 
 	return l
 }

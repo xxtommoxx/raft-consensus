@@ -40,7 +40,9 @@ func (s *SyncService) Stop() error {
 		return nil // TODO return error
 	} else {
 		stopRes := s.stopFn()
-		s.wg.Wait()
+		if s.startBackgroundFn != nil {
+			s.wg.Wait()
+		}
 		s.Status = Stopped
 		return stopRes
 	}
@@ -53,14 +55,16 @@ func (s *SyncService) Start() error {
 	if s.Status == Started {
 		return nil // TODO return error
 	} else {
-		s.wg.Add(1)
 
 		startRes := s.startFn()
 
-		go func() {
-			s.startBackgroundFn()
-			s.wg.Done()
-		}()
+		if s.startBackgroundFn != nil {
+			s.wg.Add(1)
+			go func() {
+				s.startBackgroundFn()
+				s.wg.Done()
+			}()
+		}
 
 		s.Status = Started
 		return startRes
