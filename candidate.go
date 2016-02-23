@@ -8,10 +8,6 @@ import (
 
 type VoteResponse struct{}
 
-const (
-	stopVote = iota
-)
-
 type Candidate struct {
 	*common.SyncService
 
@@ -20,7 +16,6 @@ type Candidate struct {
 	client   rpc.Client
 
 	stateStore StateStore
-	voteCh     chan int
 }
 
 type CandidateListener interface {
@@ -59,12 +54,9 @@ func (h *Candidate) startVote() {
 
 	for {
 		select {
-		case <-h.voteCh:
-			close(cancelChan)
 		case <-responseChan:
 			currentVoteCount++
 			if h.quorum.obtained(currentVoteCount) {
-				close(cancelChan)
 				h.listener.QuorumObtained(currentTerm)
 				return
 			}
@@ -78,6 +70,5 @@ func (h *Candidate) syncStart() error {
 }
 
 func (h *Candidate) syncStop() error {
-	h.voteCh <- stopVote
 	return nil
 }

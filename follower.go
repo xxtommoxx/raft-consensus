@@ -121,7 +121,7 @@ func (f *Follower) RequestVote(req *rpc.VoteRequest) (bool, error) {
 
 	votedFor := f.stateStore.VotedFor()
 	if votedFor == nil || votedFor.Term < req.Term {
-		vote := Vote{req.Term, req.CandidateId}
+		vote := Vote{req.Term, req.Id}
 		f.stateStore.SaveVote(&vote)
 		return true, nil
 	}

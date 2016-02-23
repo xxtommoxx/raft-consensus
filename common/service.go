@@ -1,6 +1,9 @@
 package common
 
-import "sync"
+import (
+	"errors"
+	"sync"
+)
 
 type Service interface {
 	Stop() error
@@ -12,6 +15,7 @@ type ServiceState int
 const (
 	Started ServiceState = iota
 	Stopped
+	Unstarted
 )
 
 type SyncService struct {
@@ -26,6 +30,7 @@ type SyncService struct {
 
 func NewSyncService(startFn func() error, startBackgroundFn func(), stopFn func() error) *SyncService {
 	return &SyncService{
+		Status:            Unstarted,
 		startFn:           startFn,
 		startBackgroundFn: startBackgroundFn,
 		stopFn:            stopFn,
@@ -36,8 +41,8 @@ func (s *SyncService) Stop() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.Status == Stopped {
-		return nil // TODO return error
+	if s.Status == Stopped || s.Status == Unstarted {
+		return errors.New("Already stopped or was not started")
 	} else {
 		stopRes := s.stopFn()
 		if s.startBackgroundFn != nil {
@@ -53,21 +58,25 @@ func (s *SyncService) Start() error {
 	defer s.mutex.Unlock()
 
 	if s.Status == Started {
-		return nil // TODO return error
+		return errors.New("Already started")
 	} else {
 
-		startRes := s.startFn()
+		err := s.startFn()
 
-		if s.startBackgroundFn != nil {
-			s.wg.Add(1)
-			go func() {
-				s.startBackgroundFn()
-				s.wg.Done()
-			}()
+		if err != nil {
+			return err
+		} else {
+			if s.startBackgroundFn != nil {
+				s.wg.Add(1)
+				go func() {
+					s.startBackgroundFn()
+					s.wg.Done()
+				}()
+			}
+
+			s.Status = Started
+			return nil
 		}
-
-		s.Status = Started
-		return startRes
 	}
 }
 

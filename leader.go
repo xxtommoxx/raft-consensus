@@ -37,15 +37,10 @@ func (l *Leader) startKeepAliveTimer() {
 
 	timer := time.NewTimer(l.keepAliveMs)
 
-	keepAliveCancelChan := make(chan struct{})
-
 	for {
 		select {
 		case <-l.stopCh: // currently there is only a stop timer event
 			timer.Stop()
-			if keepAliveCancelChan != nil {
-				close(keepAliveCancelChan)
-			}
 		case <-timer.C:
 			l.WithMutex(func() {
 				if l.Status != common.Stopped {

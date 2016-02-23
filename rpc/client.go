@@ -1,18 +1,26 @@
 package rpc
 
 import (
+	"errors"
+	"fmt"
 	"github.com/xxtommoxx/raft-consensus/common"
+	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"time"
 )
 
+type StreamVoteResponse struct {
+	response <-chan struct{}
+}
+
 type Client interface {
-	SendRequestVote(cancel <-chan struct{}) <-chan VoteResponse
-	SendKeepAlive(cancel <-chan struct{}) <-chan KeepAliveResponse
+	SendRequestVote() <-chan VoteResponse
+	SendKeepAlive() <-chan KeepAliveResponse
 }
 
 type gRpcClient struct {
-	conn      *grpc.ClientConn
-	rpcClient RpcServiceClient
+	conn *grpc.ClientConn
+	RpcServiceClient
 }
 
 type client struct {
@@ -66,7 +74,7 @@ func (c *client) closeConnections() error {
 	}
 
 	if someFailed {
-		return nil // TODO return useful error mes
+		return nil // TODO return useful error msg
 	} else {
 		return nil
 	}
@@ -74,13 +82,49 @@ func (c *client) closeConnections() error {
 }
 
 func newGRpcClient(host string) (*gRpcClient, error) {
-	opts := []grpc.DialOption{grpc.WithInsecure(), grpc.WithBlock()}
-
-	conn, err := grpc.Dial(host, opts...)
+	conn, err := grpc.Dial(host, grpc.WithInsecure())
 
 	if err != nil {
 		return nil, err
 	} else {
-		return &gRpcClient{conn: conn, rpcClient: NewRpcServiceClient(conn)}, nil
+		for i := 1; i <= 20; i++ {
+			s, sErr := conn.State()
+
+			if sErr != nil {
+				return nil, sErr
+			} else {
+				if s == grpc.TransientFailure {
+					return nil, errors.New(fmt.Sprintf("Failed to establish initial connection for host %v", host))
+				} else if s == grpc.Ready {
+					return &gRpcClient{conn: conn, RpcServiceClient: NewRpcServiceClient(conn)}, nil
+				}
+
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+		return nil, errors.New("Initial connection failed to go to state READY")
 	}
+}
+
+func (c *client) SendRequestVote(cancel <-chan struct{}) <-chan VoteResponse {
+	// create a channel of size 4
+	// put on each host of the host channel
+	// if all 4 have finished executing close the response chan
+
+	return nil
+}
+
+func (c *client) SendKeepAlive(cancel <-chan struct{}) <-chan KeepAliveResponse {
+	for _, gRpcClient := range c.rpcClients {
+
+		k := context.Background()
+
+		resp, err := gRpcClient.KeepAlive(k, &KeepAliveRequest{})
+		if err != nil {
+			fmt.Println(err)
+		} else {
+			fmt.Println(resp.Term)
+		}
+	}
+	return nil
 }
