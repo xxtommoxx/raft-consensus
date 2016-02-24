@@ -83,6 +83,11 @@ func (s *SyncService) Start() error {
 func (s *SyncService) WithMutex(fn func()) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-
 	fn()
+}
+
+func (s *SyncService) WithMutexReturning(fn func() interface{}) interface{} {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return fn()
 }

@@ -13,18 +13,20 @@ type Leader struct {
 	keepAliveMs time.Duration
 	stopCh      chan int
 
-	client rpc.Client
+	client     rpc.Client
+	stateStore StateStore
 }
 
 const (
 	stopLeaderTimer = iota
 )
 
-func NewLeader(keepAliveMs uint32, client rpc.Client) *Leader {
+func NewLeader(keepAliveMs uint32, client rpc.Client, stateStore StateStore) *Leader {
 	l := &Leader{
 		keepAliveMs: time.Duration(keepAliveMs) * time.Millisecond,
 		client:      client,
 		stopCh:      make(chan int),
+		stateStore:  stateStore,
 	}
 
 	l.SyncService = common.NewSyncService(l.syncStart, l.startKeepAliveTimer, l.syncStop)
@@ -44,7 +46,7 @@ func (l *Leader) startKeepAliveTimer() {
 		case <-timer.C:
 			l.WithMutex(func() {
 				if l.Status != common.Stopped {
-					l.client.SendKeepAlive(keepAliveCancelChan)
+					l.client.SendKeepAlive(l.stateStore.CurrentTerm())
 					timer = time.NewTimer(l.keepAliveMs)
 				}
 			})

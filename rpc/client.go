@@ -6,6 +6,7 @@ import (
 	"github.com/xxtommoxx/raft-consensus/common"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
+	"sync"
 	"time"
 )
 
@@ -14,31 +15,27 @@ type StreamVoteResponse struct {
 }
 
 type Client interface {
-	SendRequestVote() <-chan VoteResponse
-	SendKeepAlive() <-chan KeepAliveResponse
+	SendRequestVote(term uint32) <-chan VoteResponse
+	SendKeepAlive(term uint32) <-chan *KeepAliveResponse
 }
 
 type gRpcClient struct {
 	conn *grpc.ClientConn
 	RpcServiceClient
+	requestCh chan<- func()
 }
 
 type client struct {
 	*common.SyncService
+	config common.NodeConfig
+
+	peers      []common.NodeConfig
 	rpcClients map[string]*gRpcClient // use SyncService withMutex to read / write
 }
 
-func NewClient(hosts ...string) *client {
-	rpcClients := make(map[string]*gRpcClient)
-
-	for _, h := range hosts {
-		rpcClients[h] = nil
-
-	}
-	client := &client{rpcClients: rpcClients}
-
+func NewClient(config common.NodeConfig, peers ...common.NodeConfig) *client {
+	client := &client{peers: peers}
 	client.SyncService = common.NewSyncService(client.syncStart, nil, client.syncStop)
-
 	return client
 }
 func (c *client) syncStop() error {
@@ -46,14 +43,14 @@ func (c *client) syncStop() error {
 }
 
 func (c *client) syncStart() error {
-	for h, _ := range c.rpcClients {
-		newGRpcClient, err := newGRpcClient(h)
+	for _, peer := range c.peers {
+		newGRpcClient, err := newGRpcClient(peer)
 
 		if err != nil {
 			c.closeConnections()
 			return err
 		} else {
-			c.rpcClients[h] = newGRpcClient
+			c.rpcClients[peer.Id] = newGRpcClient
 		}
 	}
 
@@ -81,8 +78,8 @@ func (c *client) closeConnections() error {
 
 }
 
-func newGRpcClient(host string) (*gRpcClient, error) {
-	conn, err := grpc.Dial(host, grpc.WithInsecure())
+func newGRpcClient(peer common.NodeConfig) (*gRpcClient, error) {
+	conn, err := grpc.Dial(peer.Host, grpc.WithInsecure())
 
 	if err != nil {
 		return nil, err
@@ -94,7 +91,7 @@ func newGRpcClient(host string) (*gRpcClient, error) {
 				return nil, sErr
 			} else {
 				if s == grpc.TransientFailure {
-					return nil, errors.New(fmt.Sprintf("Failed to establish initial connection for host %v", host))
+					return nil, errors.New(fmt.Sprintf("Failed to establish initial connection for host %v", peer.Host))
 				} else if s == grpc.Ready {
 					return &gRpcClient{conn: conn, RpcServiceClient: NewRpcServiceClient(conn)}, nil
 				}
@@ -106,25 +103,48 @@ func newGRpcClient(host string) (*gRpcClient, error) {
 	}
 }
 
-func (c *client) SendRequestVote(cancel <-chan struct{}) <-chan VoteResponse {
-	// create a channel of size 4
-	// put on each host of the host channel
-	// if all 4 have finished executing close the response chan
+func (c *client) leaderInfo(term uint32) *LeaderInfo {
+	return &LeaderInfo{
+		Id:   c.config.Id,
+		Term: term,
+	}
+}
+
+func (c *client) SendRequestVote(term uint32) <-chan VoteResponse {
 
 	return nil
 }
 
-func (c *client) SendKeepAlive(cancel <-chan struct{}) <-chan KeepAliveResponse {
-	for _, gRpcClient := range c.rpcClients {
+func (c *client) safeGetRpcClients() map[string]*gRpcClient {
+	return c.WithMutexReturning(func() interface{} {
+		return c.rpcClients
+	}).(map[string]*gRpcClient)
+}
 
-		k := context.Background()
+func (c *client) SendKeepAlive(term uint32) <-chan *KeepAliveResponse {
+	rpcClients := c.safeGetRpcClients()
+	numClients := len(rpcClients)
 
-		resp, err := gRpcClient.KeepAlive(k, &KeepAliveRequest{})
-		if err != nil {
-			fmt.Println(err)
-		} else {
-			fmt.Println(resp.Term)
-		}
+	// TODO extract all this boiler-plate code to common function
+	respCh := make(chan *KeepAliveResponse, numClients)
+	var wg sync.WaitGroup
+	wg.Add(numClients)
+
+	for _, rpcClient := range rpcClients {
+		go func() {
+			defer close(respCh)
+
+			rpcClient.requestCh <- func() {
+				resp, err := rpcClient.KeepAlive(context.Background(), &KeepAliveRequest{LeaderInfo: c.leaderInfo(term)})
+				// log error
+				fmt.Println(err)
+				respCh <- resp
+				wg.Done()
+			}
+
+			wg.Wait()
+		}()
 	}
-	return nil
+
+	return respCh
 }

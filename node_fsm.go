@@ -4,7 +4,6 @@ import (
 	"errors"
 	"github.com/xxtommoxx/raft-consensus/common"
 	"github.com/xxtommoxx/raft-consensus/rpc"
-	"reflect"
 )
 
 /**
@@ -269,24 +268,7 @@ func (this *NodeFSM) sendRpcRequest(term uint32, rpc interface{}, responseChan i
 			term:         term,
 			rpc:          rpc,
 			errorChan:    make(chan error),
-			responseChan: toChan(responseChan),
+			responseChan: common.ToChan(responseChan),
 		}
 	}()
-}
-
-func toChan(in interface{}) chan interface{} {
-	out := make(chan interface{})
-	cin := reflect.ValueOf(in)
-
-	go func() {
-		defer close(out)
-		for {
-			x, ok := cin.Recv()
-			if !ok {
-				return
-			}
-			out <- x.Interface()
-		}
-	}()
-	return out
 }

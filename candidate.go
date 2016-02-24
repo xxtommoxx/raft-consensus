@@ -49,8 +49,7 @@ func (h *Candidate) startVote() {
 	currentTerm := h.stateStore.CurrentTerm()
 	var currentVoteCount uint32 = 0
 
-	cancelChan := make(chan struct{})
-	responseChan := h.client.SendRequestVote(cancelChan)
+	responseChan := h.client.SendRequestVote(currentTerm)
 
 	for {
 		select {
