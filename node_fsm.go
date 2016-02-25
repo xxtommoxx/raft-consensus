@@ -239,6 +239,9 @@ func (this *NodeFSM) processAsync(ctx rpcContext, fn func() (interface{}, error)
 	go func() {
 		result, err := fn()
 
+		defer close(ctx.errorChan)
+		defer close(ctx.responseChan)
+
 		if err != nil {
 			ctx.errorChan <- err
 		} else {
@@ -268,7 +271,7 @@ func (this *NodeFSM) sendRpcRequest(term uint32, rpc interface{}, responseChan i
 			term:         term,
 			rpc:          rpc,
 			errorChan:    make(chan error),
-			responseChan: common.ToChan(responseChan),
+			responseChan: common.ToForwardedChan(responseChan),
 		}
 	}()
 }

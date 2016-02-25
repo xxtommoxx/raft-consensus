@@ -121,22 +121,31 @@ func (c *client) safeGetRpcClients() map[string]*gRpcClient {
 	}).(map[string]*gRpcClient)
 }
 
-func (c *client) SendKeepAlive(term uint32) <-chan *KeepAliveResponse {
+type RequestFunc func(*gRpcClient) (interface{}, error)
+
+type FanoutCh <-chan interface{}
+
+func (c FanoutCh) andFoward(chFn func(int) interface{}) interface{} {
+	respCap := cap(c)
+	forwardCh := chFn(respCap)
+	common.FowardChan(c, forwardCh)
+	return forwardCh
+}
+
+func (c *client) fanoutRequest(handle RequestFunc) FanoutCh {
 	rpcClients := c.safeGetRpcClients()
 	numClients := len(rpcClients)
 
-	// TODO extract all this boiler-plate code to common function
-	respCh := make(chan *KeepAliveResponse, numClients)
 	var wg sync.WaitGroup
 	wg.Add(numClients)
+	respCh := make(chan interface{}, numClients)
 
 	for _, rpcClient := range rpcClients {
 		go func() {
 			defer close(respCh)
 
 			rpcClient.requestCh <- func() {
-				resp, err := rpcClient.KeepAlive(context.Background(), &KeepAliveRequest{LeaderInfo: c.leaderInfo(term)})
-				// log error
+				resp, err := handle(rpcClient)
 				fmt.Println(err)
 				respCh <- resp
 				wg.Done()
@@ -147,4 +156,14 @@ func (c *client) SendKeepAlive(term uint32) <-chan *KeepAliveResponse {
 	}
 
 	return respCh
+}
+
+func (c *client) SendKeepAlive(term uint32) <-chan *KeepAliveResponse {
+	respCh := c.fanoutRequest(func(r *gRpcClient) (interface{}, error) {
+		return r.KeepAlive(context.Background(), &KeepAliveRequest{LeaderInfo: c.leaderInfo(term)})
+	}).andFoward(func(respCap int) interface{} {
+		return make(chan *KeepAliveResponse, respCap)
+	})
+
+	return respCh.(chan *KeepAliveResponse)
 }
