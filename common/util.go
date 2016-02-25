@@ -18,8 +18,14 @@ func fowardChanHelper(src <-chan interface{}, to reflect.Value) {
 		defer to.Close()
 
 		for {
-			x := <-src
-			to.Send(reflect.ValueOf(x))
+			x, ok := <-src
+
+			if ok {
+				to.Send(reflect.ValueOf(x))
+			} else {
+				return
+			}
+
 		}
 	}()
 }

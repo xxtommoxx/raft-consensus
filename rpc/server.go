@@ -5,7 +5,6 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"net"
-	"time"
 )
 
 type server struct {
@@ -47,7 +46,6 @@ func (s *server) syncStop() error {
 
 func (s *server) KeepAlive(ctx context.Context, req *KeepAliveRequest) (*KeepAliveResponse, error) {
 	count := s.counter + 1
-	time.Sleep(time.Millisecond * 5000)
 
 	s.counter++
 

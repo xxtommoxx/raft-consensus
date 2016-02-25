@@ -22,7 +22,7 @@ type Client interface {
 type gRpcClient struct {
 	conn *grpc.ClientConn
 	RpcServiceClient
-	requestCh chan<- func()
+	requestCh chan func()
 }
 
 type client struct {
@@ -35,14 +35,32 @@ type client struct {
 
 func NewClient(config common.NodeConfig, peers ...common.NodeConfig) *client {
 	client := &client{peers: peers}
-	client.SyncService = common.NewSyncService(client.syncStart, nil, client.syncStop)
+	client.SyncService = common.NewSyncService(client.syncStart, client.asyncStart, client.syncStop)
 	return client
 }
+
+func (c *client) asyncStart() {
+	numClient := len(c.rpcClients)
+
+	var wg sync.WaitGroup
+	wg.Add(numClient)
+
+	for _, rpcClient := range c.rpcClients {
+		go func() {
+			for reqFn := range rpcClient.requestCh {
+				reqFn()
+			}
+		}()
+	}
+}
+
 func (c *client) syncStop() error {
-	return c.closeConnections()
+	return c.closeConnections() // TODO let each individual client handle
 }
 
 func (c *client) syncStart() error {
+	rpcClientMap := make(map[string]*gRpcClient)
+
 	for _, peer := range c.peers {
 		newGRpcClient, err := newGRpcClient(peer)
 
@@ -50,9 +68,11 @@ func (c *client) syncStart() error {
 			c.closeConnections()
 			return err
 		} else {
-			c.rpcClients[peer.Id] = newGRpcClient
+			rpcClientMap[peer.Id] = newGRpcClient
 		}
 	}
+
+	c.rpcClients = rpcClientMap
 
 	return nil
 }
@@ -93,7 +113,7 @@ func newGRpcClient(peer common.NodeConfig) (*gRpcClient, error) {
 				if s == grpc.TransientFailure {
 					return nil, errors.New(fmt.Sprintf("Failed to establish initial connection for host %v", peer.Host))
 				} else if s == grpc.Ready {
-					return &gRpcClient{conn: conn, RpcServiceClient: NewRpcServiceClient(conn)}, nil
+					return &gRpcClient{conn: conn, RpcServiceClient: NewRpcServiceClient(conn), requestCh: make(chan func())}, nil
 				}
 
 				time.Sleep(500 * time.Millisecond)
@@ -146,7 +166,11 @@ func (c *client) fanoutRequest(handle RequestFunc) FanoutCh {
 
 			rpcClient.requestCh <- func() {
 				resp, err := handle(rpcClient)
-				fmt.Println(err)
+
+				if err != nil {
+					fmt.Println(err)
+				}
+
 				respCh <- resp
 				wg.Done()
 			}
