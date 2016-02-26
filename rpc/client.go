@@ -36,23 +36,23 @@ type client struct {
 }
 
 func NewClient(listener ResponseListener, rconfig common.NodeConfig, peers ...common.NodeConfig) *client {
-	client := &client{peers: peers}
+	client := &client{peers: peers, listener: listener}
 	client.SyncService = common.NewSyncService(client.syncStart, client.asyncStart, client.syncStop)
 	return client
 }
 
 func (c *client) asyncStart() {
-	numClient := len(c.rpcClients)
+	// numClient := len(c.rpcClients)
 
-	var wg sync.WaitGroup
-	wg.Add(numClient)
+	// var wg sync.WaitGroup
+	// wg.Add(numClient)
 
-	for _, rpcClient := range c.rpcClients {
-		go func() {
+	for _, r := range c.rpcClients {
+		go func(rpcClient *gRpcClient) {
 			for reqFn := range rpcClient.requestCh {
 				reqFn()
 			}
-		}()
+		}(r)
 	}
 }
 
@@ -186,10 +186,13 @@ func (c *client) fanoutRequest(handle requestFunc) fanoutCh {
 	wg.Add(numClients)
 	respCh := make(chan interface{}, numClients)
 
-	for _, rpcClient := range rpcClients {
-		go func() {
-			defer close(respCh)
+	go func() {
+		defer close(respCh)
+		wg.Wait()
+	}()
 
+	for _, r := range rpcClients {
+		go func(rpcClient *gRpcClient) {
 			rpcClient.requestCh <- func() {
 				resp := handle(rpcClient)
 
@@ -197,14 +200,12 @@ func (c *client) fanoutRequest(handle requestFunc) fanoutCh {
 					fmt.Println(resp.err)
 				} else {
 					c.listener.ResponseReceived(resp.term)
-					respCh <- resp
+					respCh <- resp.result
 				}
 
 				wg.Done()
 			}
-
-			wg.Wait()
-		}()
+		}(r)
 	}
 
 	return respCh

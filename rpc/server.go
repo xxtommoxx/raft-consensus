@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"fmt"
 	"github.com/xxtommoxx/raft-consensus/common"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
@@ -9,20 +10,24 @@ import (
 
 type server struct {
 	*common.SyncService
+	host string
 
 	counter uint32
 
 	grpcServer *grpc.Server
 }
 
-func NewServer() *server {
-	server := new(server)
+func NewServer(host string) *server {
+	server := &server{host: host}
 	server.SyncService = common.NewSyncService(server.syncStart, nil, server.syncStop)
 	return server
 }
 
 func (s *server) syncStart() error {
-	lis, err := net.Listen("tcp", ":8080")
+
+	fmt.Println("!!!", s.host)
+
+	lis, err := net.Listen("tcp", s.host)
 
 	if err != nil {
 		return err

@@ -1,9 +1,9 @@
 package raft
 
 import (
-	"fmt"
 	"github.com/xxtommoxx/raft-consensus/common"
 	"github.com/xxtommoxx/raft-consensus/rpc"
+	"log"
 )
 
 type VoteResponse struct{}
@@ -44,9 +44,9 @@ func (h *Candidate) SetListener(listener CandidateListener) {
 }
 
 func (h *Candidate) startVote() {
-	fmt.Println("Starting candidate vote process")
-
 	currentTerm := h.stateStore.CurrentTerm()
+
+	log.Printf("Starting candidate vote process for term: %v", currentTerm)
 
 	responseChan := h.client.SendRequestVote(currentTerm)
 
@@ -62,7 +62,6 @@ func (h *Candidate) startVote() {
 }
 
 func (h *Candidate) syncStart() error {
-	fmt.Println("Starting candidate")
 	return nil
 }
 
