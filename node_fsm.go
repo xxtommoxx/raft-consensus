@@ -44,6 +44,7 @@ type internalRequest struct {
 const (
 	leaderTimeout internalEvent = iota
 	quorumObtained
+	responseReceived
 )
 
 type internalEvent int
@@ -256,6 +257,10 @@ func (this *NodeFSM) OnKeepAliveTimeout(term uint32) {
 
 func (this *NodeFSM) QuorumObtained(term uint32) {
 	this.sendInternalRequest(term, quorumObtained)
+}
+
+func (this *NodeFSM) ResponseReceived(term uint32) {
+	this.sendInternalRequest(term, responseReceived)
 }
 
 func (this *NodeFSM) sendInternalRequest(term uint32, ie internalEvent) {

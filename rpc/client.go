@@ -29,11 +29,13 @@ type client struct {
 	*common.SyncService
 	config common.NodeConfig
 
+	listener ResponseListener
+
 	peers      []common.NodeConfig
 	rpcClients map[string]*gRpcClient // use SyncService withMutex to read / write
 }
 
-func NewClient(config common.NodeConfig, peers ...common.NodeConfig) *client {
+func NewClient(listener ResponseListener, rconfig common.NodeConfig, peers ...common.NodeConfig) *client {
 	client := &client{peers: peers}
 	client.SyncService = common.NewSyncService(client.syncStart, client.asyncStart, client.syncStop)
 	return client
@@ -91,7 +93,7 @@ func (c *client) closeConnections() error {
 	}
 
 	if someFailed {
-		return nil // TODO return useful error msg
+		return errors.New("Failed to close connection")
 	} else {
 		return nil
 	}
@@ -130,29 +132,53 @@ func (c *client) leaderInfo(term uint32) *LeaderInfo {
 	}
 }
 
-func (c *client) SendRequestVote(term uint32) <-chan VoteResponse {
-
-	return nil
-}
-
 func (c *client) safeGetRpcClients() map[string]*gRpcClient {
 	return c.WithMutexReturning(func() interface{} {
 		return c.rpcClients
 	}).(map[string]*gRpcClient)
 }
 
-type RequestFunc func(*gRpcClient) (interface{}, error)
+func (c *client) SendRequestVote(term uint32) <-chan *VoteResponse {
+	respCh := c.fanoutRequest(func(r *gRpcClient) response {
+		res, err := r.ElectLeader(context.Background(), &VoteRequest{Term: term, Id: c.config.Id})
+		return response{res.Term, res, err}
+	}).andFoward(func(respCap int) interface{} {
+		return make(chan *VoteResponse, respCap)
+	})
 
-type FanoutCh <-chan interface{}
+	return respCh.(chan *VoteResponse)
+}
 
-func (c FanoutCh) andFoward(chFn func(int) interface{}) interface{} {
+func (c *client) SendKeepAlive(term uint32) <-chan *KeepAliveResponse {
+	respCh := c.fanoutRequest(func(r *gRpcClient) response {
+		res, err := r.KeepAlive(context.Background(), &KeepAliveRequest{LeaderInfo: c.leaderInfo(term)})
+		return response{res.Term, res, err}
+	}).andFoward(func(respCap int) interface{} {
+		return make(chan *KeepAliveResponse, respCap)
+	})
+
+	return respCh.(chan *KeepAliveResponse)
+}
+
+// Generic code that fans out requests to the peers.
+type requestFunc func(*gRpcClient) response
+
+type response struct {
+	term   uint32
+	result interface{}
+	err    error
+}
+
+type fanoutCh <-chan interface{}
+
+func (c fanoutCh) andFoward(chFn func(int) interface{}) interface{} {
 	respCap := cap(c)
 	forwardCh := chFn(respCap)
 	common.FowardChan(c, forwardCh)
 	return forwardCh
 }
 
-func (c *client) fanoutRequest(handle RequestFunc) FanoutCh {
+func (c *client) fanoutRequest(handle requestFunc) fanoutCh {
 	rpcClients := c.safeGetRpcClients()
 	numClients := len(rpcClients)
 
@@ -165,13 +191,15 @@ func (c *client) fanoutRequest(handle RequestFunc) FanoutCh {
 			defer close(respCh)
 
 			rpcClient.requestCh <- func() {
-				resp, err := handle(rpcClient)
+				resp := handle(rpcClient)
 
-				if err != nil {
-					fmt.Println(err)
+				if resp.err != nil {
+					fmt.Println(resp.err)
+				} else {
+					c.listener.ResponseReceived(resp.term)
+					respCh <- resp
 				}
 
-				respCh <- resp
 				wg.Done()
 			}
 
@@ -180,14 +208,4 @@ func (c *client) fanoutRequest(handle RequestFunc) FanoutCh {
 	}
 
 	return respCh
-}
-
-func (c *client) SendKeepAlive(term uint32) <-chan *KeepAliveResponse {
-	respCh := c.fanoutRequest(func(r *gRpcClient) (interface{}, error) {
-		return r.KeepAlive(context.Background(), &KeepAliveRequest{LeaderInfo: c.leaderInfo(term)})
-	}).andFoward(func(respCap int) interface{} {
-		return make(chan *KeepAliveResponse, respCap)
-	})
-
-	return respCh.(chan *KeepAliveResponse)
 }

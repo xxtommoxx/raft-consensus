@@ -120,7 +120,7 @@ func (f *Follower) RequestVote(req *rpc.VoteRequest) (bool, error) {
 	f.resetTimer()
 
 	votedFor := f.stateStore.VotedFor()
-	if votedFor == nil || votedFor.Term < req.Term {
+	if votedFor == nil || votedFor.Term < req.Term || (votedFor.Term == req.Term && votedFor.NodeId == req.Id) {
 		vote := Vote{req.Term, req.Id}
 		f.stateStore.SaveVote(&vote)
 		return true, nil
