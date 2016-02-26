@@ -47,15 +47,13 @@ func (h *Candidate) startVote() {
 	fmt.Println("Starting candidate vote process")
 
 	currentTerm := h.stateStore.CurrentTerm()
-	var currentVoteCount uint32 = 0
 
 	responseChan := h.client.SendRequestVote(currentTerm)
 
 	for {
 		select {
 		case <-responseChan:
-			currentVoteCount++
-			if h.quorum.obtained(currentVoteCount) {
+			if h.quorum.VoteObtained(currentTerm) {
 				h.listener.QuorumObtained(currentTerm)
 				return
 			}

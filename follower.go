@@ -26,7 +26,7 @@ func (noopFollowerListener) OnKeepAliveTimeout(term uint32) {}
 type Follower struct {
 	*common.SyncService
 
-	timeout      LeaderTimeout
+	timeout      common.LeaderTimeout
 	listener     FollowerListener
 	timeoutRange int64
 	keepAlive    chan int
@@ -37,7 +37,7 @@ type Follower struct {
 	voteMutex  sync.Mutex
 }
 
-func NewFollower(stateStore StateStore, timeout LeaderTimeout) *Follower {
+func NewFollower(stateStore StateStore, timeout common.LeaderTimeout) *Follower {
 	follower := &Follower{
 		listener:   noopFollowerListener{},
 		stateStore: stateStore,
