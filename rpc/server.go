@@ -1,7 +1,7 @@
 package rpc
 
 import (
-	"fmt"
+	log "github.com/Sirupsen/logrus"
 	"github.com/xxtommoxx/raft-consensus/common"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
@@ -24,8 +24,7 @@ func NewServer(host string) *server {
 }
 
 func (s *server) syncStart() error {
-
-	fmt.Println("!!!", s.host)
+	log.Info("Starting rpc server using host", s.host)
 
 	lis, err := net.Listen("tcp", s.host)
 

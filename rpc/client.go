@@ -3,6 +3,7 @@ package rpc
 import (
 	"errors"
 	"fmt"
+	log "github.com/Sirupsen/logrus"
 	"github.com/xxtommoxx/raft-consensus/common"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
@@ -197,7 +198,7 @@ func (c *client) fanoutRequest(handle requestFunc) fanoutCh {
 				resp := handle(rpcClient)
 
 				if resp.err != nil {
-					fmt.Println(resp.err)
+					log.Error(resp.err)
 				} else {
 					c.listener.ResponseReceived(resp.term)
 					respCh <- resp.result

@@ -2,6 +2,7 @@ package raft
 
 import (
 	"errors"
+	"fmt"
 	"github.com/xxtommoxx/raft-consensus/common"
 	"github.com/xxtommoxx/raft-consensus/rpc"
 )
@@ -44,6 +45,7 @@ type internalRequest struct {
 const (
 	leaderTimeout internalEvent = iota
 	quorumObtained
+	quorumUnobtained
 	responseReceived
 )
 
@@ -83,6 +85,8 @@ func (this *NodeFSM) candidateHandler(candidate *Candidate) stateHandler {
 			switch internalReq.event {
 			case quorumObtained:
 				return leaderState
+			case quorumUnobtained:
+				return followerState
 			default:
 				return invalidState
 			}
@@ -197,10 +201,14 @@ func (this *NodeFSM) commonTransitionFor(_state state, internalReqFn func(intern
 
 		case rpcCtx := <-this.rpcCh:
 			return termTransition(rpcCtx.term,
-				func() { rpcCtx.errorChan <- errors.New("Old Term") },
-				func() { rpcCtx.errorChan <- errors.New("New Term") },
+				func() {
+					rpcCtx.errorChan <- errors.New(fmt.Sprint("Old Term: %v Current Term: %v", rpcCtx.term, this.stateStore.CurrentTerm()))
+				},
+				func() { this.rpcCh <- rpcCtx }, // replay by adding it back to the rpc channel after it has been transitioned to follower
 				func() state { return rpcContextFn(rpcCtx) },
-				func() { rpcCtx.errorChan <- errors.New("Can't handle while in ___ state") })
+				func() {
+					rpcCtx.errorChan <- errors.New(fmt.Sprintf("Can't handle while in %v state", this.currentState))
+				})
 		}
 	}
 }
@@ -257,6 +265,10 @@ func (this *NodeFSM) OnKeepAliveTimeout(term uint32) {
 
 func (this *NodeFSM) QuorumObtained(term uint32) {
 	this.sendInternalRequest(term, quorumObtained)
+}
+
+func (this *NodeFSM) QuorumUnobtained(term uint32) {
+	this.sendInternalRequest(term, quorumUnobtained)
 }
 
 func (this *NodeFSM) ResponseReceived(term uint32) {

@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"fmt"
 	"github.com/xxtommoxx/raft-consensus/common"
 	"github.com/xxtommoxx/raft-consensus/rpc"
 	"time"
@@ -35,8 +34,6 @@ func NewLeader(keepAliveMs uint32, client rpc.Client, stateStore StateStore) *Le
 }
 
 func (l *Leader) startKeepAliveTimer() {
-	fmt.Println("Starting leader keep alive timer")
-
 	timer := time.NewTimer(l.keepAliveMs)
 
 	for {
@@ -56,14 +53,10 @@ func (l *Leader) startKeepAliveTimer() {
 }
 
 func (l *Leader) syncStart() error {
-	fmt.Println("Starting leader")
-
 	return nil
 }
 
 func (l *Leader) syncStop() error {
-	fmt.Println("Stopping leader")
-
 	l.stopCh <- stopLeaderTimer
 	return nil
 }
