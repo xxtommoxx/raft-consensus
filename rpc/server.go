@@ -15,35 +15,39 @@ type server struct {
 	counter uint32
 
 	grpcServer *grpc.Server
+	listener   net.Listener
 }
 
 func NewServer(host string) *server {
 	server := &server{host: host}
-	server.SyncService = common.NewSyncService(server.syncStart, nil, server.syncStop)
+	server.SyncService = common.NewSyncService(server.syncStart, server.asyncStart, server.syncStop)
 	return server
 }
 
 func (s *server) syncStart() error {
-	log.Info("Starting rpc server using host", s.host)
+	log.Info("Starting rpc server using host:", s.host)
 
 	lis, err := net.Listen("tcp", s.host)
 
 	if err != nil {
+		log.Error("GRpc server failed to start:", err)
 		return err
 	} else {
 		grpcServer := grpc.NewServer()
 		s.grpcServer = grpcServer
+		s.listener = lis
 		RegisterRpcServiceServer(grpcServer, s)
 
-		// go func() {
-		// 	panic(serveErr)
-		// }()
-
-		return grpcServer.Serve(lis)
+		return nil
 	}
 }
 
+func (s *server) asyncStart() {
+	log.Error("Serve error:", s.grpcServer.Serve(s.listener))
+}
+
 func (s *server) syncStop() error {
+	log.Info("Stopping rpc server")
 	s.grpcServer.Stop()
 	return nil
 }
