@@ -20,7 +20,11 @@ type NodeFSM struct {
 
 	termCh chan uint32
 
+	stopCh chan struct{}
+
 	stateStore StateStore
+
+	*common.SyncService
 }
 
 type state int
@@ -71,6 +75,7 @@ func NewNodeFSM(stateStore StateStore, candidate *Candidate, follower *Follower,
 	}
 
 	nodeFSM.fsm = fsm
+	nodeFSM.SyncService = common.NewSyncService(nodeFSM.syncStart, nodeFSM.asyncStart, nodeFSM.syncStop)
 
 	candidate.SetListener(nodeFSM)
 	follower.SetListener(nodeFSM)
@@ -217,35 +222,55 @@ func (this *NodeFSM) commonTransitionFor(_state state, internalReqFn func(intern
 	}
 }
 
-func (this *NodeFSM) Start() {
-	go func() {
-		for {
+func (this *NodeFSM) syncStart() error {
+	this.currentState = followerState
+	this.stopCh = make(chan struct{})
+
+	return nil
+}
+
+func (this *NodeFSM) asyncStart() {
+	for {
+		select {
+		case <-this.stopCh:
+			this.storeNewTerm()
+			return
+		default:
 			currentState, currentStateHandler := this.getCurrent()
 			nextState := currentStateHandler.transition()
 
 			if nextState != currentState {
 				currentStateHandler.service.Stop()
 
-				// see if any greater term occurred while processing a request
-				select {
-				case newTerm := <-this.termCh:
-					this.stateStore.SaveCurrentTerm(newTerm)
-				default:
-				}
+				this.storeNewTerm()
 
 				this.currentState = nextState
 				this.fsm[nextState].service.Start()
 			}
 		}
-	}()
+	}
+}
+
+func (this *NodeFSM) storeNewTerm() {
+	// see if any greater term occurred while processing a request
+	select {
+	case newTerm := <-this.termCh:
+		this.stateStore.SaveCurrentTerm(newTerm)
+	default:
+	}
 }
 
 func (this *NodeFSM) getCurrent() (state, stateHandler) {
 	return this.currentState, this.fsm[this.currentState]
 }
 
-func (this *NodeFSM) Stop() {
-	// todo close the chans
+func (this *NodeFSM) syncStop() error {
+	_, stateHandler := this.getCurrent()
+	err := stateHandler.service.Stop()
+
+	close(this.stopCh)
+
+	return err
 }
 
 func (this *NodeFSM) processAsync(ctx rpcContext, fn func() (interface{}, error)) {
