@@ -275,6 +275,17 @@ func (this *NodeFSM) ResponseReceived(term uint32) {
 	this.sendInternalRequest(term, responseReceived)
 }
 
+func (this *NodeFSM) RequestVote(vote *rpc.VoteRequest) (<-chan *VoteResponse, <-chan error) {
+	respCh := make(chan *VoteResponse)
+	errorCh := this.sendRpcRequest(vote.Term, vote, respCh)
+	return respCh, errorCh
+}
+func (this *NodeFSM) KeepAlive(req *rpc.KeepAliveRequest) (<-chan *rpc.KeepAliveResponse, <-chan error) {
+	respCh := make(chan *rpc.KeepAliveResponse)
+	errorCh := this.sendRpcRequest(req.LeaderInfo.Term, req, respCh)
+	return respCh, errorCh
+}
+
 func (this *NodeFSM) sendInternalRequest(term uint32, ie internalEvent) {
 	this.internalCh <- internalRequest{
 		term:  term,
@@ -282,7 +293,9 @@ func (this *NodeFSM) sendInternalRequest(term uint32, ie internalEvent) {
 	}
 }
 
-func (this *NodeFSM) sendRpcRequest(term uint32, rpc interface{}, responseChan interface{}) {
+func (this *NodeFSM) sendRpcRequest(term uint32, rpc interface{}, responseChan interface{}) <-chan error {
+	errorCh := make(chan error)
+
 	go func() {
 		this.rpcCh <- rpcContext{
 			term:         term,
@@ -291,4 +304,6 @@ func (this *NodeFSM) sendRpcRequest(term uint32, rpc interface{}, responseChan i
 			responseChan: common.ToForwardedChan(responseChan),
 		}
 	}()
+
+	return errorCh
 }

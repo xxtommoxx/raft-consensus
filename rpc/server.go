@@ -8,6 +8,11 @@ import (
 	"net"
 )
 
+type RequestHandler interface {
+	RequestVote(req *VoteRequest) (<-chan *VoteResponse, <-chan error)
+	KeepAlive(req *KeepAliveRequest) (<-chan *KeepAliveResponse, <-chan error)
+}
+
 type server struct {
 	*common.SyncService
 	host string
@@ -16,10 +21,12 @@ type server struct {
 
 	grpcServer *grpc.Server
 	listener   net.Listener
+
+	requestHandler RequestHandler
 }
 
-func NewServer(host string) *server {
-	server := &server{host: host}
+func NewServer(host string, requestHandler RequestHandler) *server {
+	server := &server{host: host, requestHandler: requestHandler}
 	server.SyncService = common.NewSyncService(server.syncStart, server.asyncStart, server.syncStop)
 	return server
 }
@@ -53,12 +60,25 @@ func (s *server) syncStop() error {
 }
 
 func (s *server) KeepAlive(ctx context.Context, req *KeepAliveRequest) (*KeepAliveResponse, error) {
-	count := s.counter + 1
+	respCh, errCh := s.requestHandler.KeepAlive(req)
 
-	s.counter++
+	select {
+	case resp := <-respCh:
+		return resp, nil
+	case err := <-errCh:
+		return nil, err
+	}
+}
 
-	return &KeepAliveResponse{count}, nil
+func (s *server) ElectLeader(ctx context.Context, req *VoteRequest) (*VoteResponse, error) {
+	respCh, errCh := s.requestHandler.RequestVote(req)
 
+	select {
+	case resp := <-respCh:
+		return resp, nil
+	case err := <-errCh:
+		return nil, err
+	}
 }
 
 func (s *server) AppendLogEntries(ctx context.Context, req *AppendLogEntryRequest) (*AppendEntryResponse, error) {
@@ -66,10 +86,6 @@ func (s *server) AppendLogEntries(ctx context.Context, req *AppendLogEntryReques
 }
 
 func (s *server) UpdateConfiguration(ctx context.Context, req *AppendConfigEntryRequest) (*AppendEntryResponse, error) {
-	return nil, nil
-}
-
-func (s *server) ElectLeader(ctx context.Context, req *VoteRequest) (*VoteResponse, error) {
 	return nil, nil
 }
 
