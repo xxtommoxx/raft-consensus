@@ -114,8 +114,9 @@ func (f *Follower) resetTimer() {
 	})
 }
 
-func (f *Follower) KeepAliveRequest(req *rpc.KeepAliveRequest) {
+func (f *Follower) KeepAliveRequest(req *rpc.KeepAliveRequest) (*rpc.KeepAliveResponse, error) {
 	f.resetTimer()
+	return &rpc.KeepAliveResponse{Term: f.stateStore.CurrentTerm()}, nil
 }
 
 func (f *Follower) RequestVote(req *rpc.VoteRequest) (bool, error) {

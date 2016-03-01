@@ -142,6 +142,10 @@ func (this *NodeFSM) followerHandler(follower *Follower) stateHandler {
 			case *rpc.VoteRequest:
 				this.processAsync(rpcCtx, func() (interface{}, error) { return follower.RequestVote(req) })
 				return followerState
+			case *rpc.KeepAliveRequest:
+				this.processAsync(rpcCtx, func() (interface{}, error) { return follower.KeepAliveRequest(req) })
+				return followerState
+
 			default:
 				return invalidState
 			}
