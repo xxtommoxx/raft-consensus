@@ -69,7 +69,7 @@ func (f *Follower) startBackGroundTimer() {
 		select {
 		case timerEvent := <-f.keepAlive:
 			if timerEvent == timerStop {
-				log.Debug("Terminating leader timer")
+				log.Debug("Stopping leader timer")
 				timer.Stop()
 				return
 			}

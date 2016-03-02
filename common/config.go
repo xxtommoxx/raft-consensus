@@ -3,9 +3,10 @@ package common
 import "time"
 
 type Config struct {
-	self   NodeConfig
-	leader LeaderConfig
-	peers  []NodeConfig
+	self                  NodeConfig
+	leader                LeaderConfig
+	peers                 []NodeConfig
+	perecentOfVotesNeeded float64
 }
 
 type NodeConfig struct {

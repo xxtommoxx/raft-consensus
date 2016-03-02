@@ -1,6 +1,7 @@
 package raft
 
 import (
+	log "github.com/Sirupsen/logrus"
 	"github.com/xxtommoxx/raft-consensus/common"
 	"github.com/xxtommoxx/raft-consensus/rpc"
 	"time"
@@ -39,6 +40,7 @@ func (l *Leader) startKeepAliveTimer() {
 	for {
 		select {
 		case <-l.stopCh: // currently there is only a stop timer event
+			log.Debug("Stopping keep alive timer")
 			timer.Stop()
 		case <-timer.C:
 			l.WithMutex(func() {
