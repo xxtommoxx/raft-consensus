@@ -1,12 +1,10 @@
 package common
 
-import "time"
-
 type Config struct {
-	self                  NodeConfig
-	leader                LeaderConfig
-	peers                 []NodeConfig
-	perecentOfVotesNeeded float64
+	Self                  NodeConfig
+	Leader                LeaderConfig
+	Peers                 []NodeConfig
+	PerecentOfVotesNeeded float64
 }
 
 type NodeConfig struct {
@@ -14,8 +12,8 @@ type NodeConfig struct {
 	Host string
 }
 type LeaderConfig struct {
-	keepAliveMs time.Duration
-	timeout     LeaderTimeout
+	KeepAliveMs int64
+	Timeout     LeaderTimeout
 }
 
 type LeaderTimeout struct {
