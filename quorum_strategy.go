@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"math"
 	"sync"
 )
 
@@ -9,23 +8,21 @@ type QuorumStrategy interface {
 	VoteObtained(term uint32) bool
 }
 
-type PercentBasedStrategy struct {
+type MajorityStrategy struct {
 	numPeers uint32
 
-	percentOfVotesNeeded float64
-	votesObtained        uint32
-	term                 uint32
-	mutex                sync.Mutex
+	votesObtained uint32
+	term          uint32
+	mutex         sync.Mutex
 }
 
-func (c *PercentBasedStrategy) NewPercentBasedStrategy(perecentOfVotesNeeded float64, numPeers uint32) *PercentBasedStrategy {
-	return &PercentBasedStrategy{
-		percentOfVotesNeeded: perecentOfVotesNeeded,
-		numPeers:             numPeers,
+func (c *MajorityStrategy) NewMajorityStrategy(numPeers uint32) *MajorityStrategy {
+	return &MajorityStrategy{
+		numPeers: numPeers,
 	}
 }
 
-func (c *PercentBasedStrategy) VoteObtained(term uint32) bool {
+func (c *MajorityStrategy) VoteObtained(term uint32) bool {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
@@ -39,6 +36,6 @@ func (c *PercentBasedStrategy) VoteObtained(term uint32) bool {
 			c.votesObtained = 1
 		}
 
-		return c.votesObtained == uint32(math.Ceil(c.percentOfVotesNeeded*float64(c.numPeers)))
+		return c.votesObtained == (c.numPeers/2)+1
 	}
 }
