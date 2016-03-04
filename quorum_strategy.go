@@ -1,41 +1,47 @@
 package raft
 
-import (
-	"sync"
-)
-
-type QuorumStrategy interface {
-	VoteObtained(term uint32) bool
+// represents an immutable quorum operation on a request of some sort
+type QuorumStrategyOp interface {
+	Accepted(term uint32) QuorumStrategyOp
+	IsObtained() bool
 }
 
-type MajorityStrategy struct {
-	numPeers uint32
+type MajorityStrategyOp struct {
+	numPeers int
 
-	votesObtained uint32
+	votesObtained int
 	term          uint32
-	mutex         sync.Mutex
 }
 
-func (c *MajorityStrategy) NewMajorityStrategy(numPeers uint32) *MajorityStrategy {
-	return &MajorityStrategy{
+func NewMajorityStrategyOp(numPeers int) QuorumStrategyOp {
+	return &MajorityStrategyOp{
 		numPeers: numPeers,
 	}
 }
 
-func (c *MajorityStrategy) VoteObtained(term uint32) bool {
-	c.mutex.Lock()
-	defer c.mutex.Unlock()
+func (c *MajorityStrategyOp) IsObtained() bool {
+	return c.votesObtained == (c.numPeers/2)+1
+}
 
-	if c.term < term {
-		return false
-	} else {
-		if c.term == term {
-			c.votesObtained++
-		} else {
-			c.term = term
-			c.votesObtained = 1
+func (c *MajorityStrategyOp) Accepted(term uint32) QuorumStrategyOp {
+	if c.term > 0 && c.term >= term {
+		return &MajorityStrategyOp{
+			numPeers:      c.numPeers,
+			term:          term,
+			votesObtained: c.votesObtained + 1,
 		}
-
-		return c.votesObtained == (c.numPeers/2)+1
+	} else {
+		return alwaysFalseStrategy{}
 	}
+
+}
+
+type alwaysFalseStrategy struct{}
+
+func (alwaysFalseStrategy) Accepted(term uint32) QuorumStrategyOp {
+	return alwaysFalseStrategy{}
+}
+
+func (alwaysFalseStrategy) IsObtained() bool {
+	return false
 }

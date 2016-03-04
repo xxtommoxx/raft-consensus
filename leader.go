@@ -44,7 +44,7 @@ func (l *Leader) startKeepAliveTimer() {
 			timer.Stop()
 		case <-timer.C:
 			l.WithMutex(func() {
-				if l.Status != common.Stopped {
+				if l.Status() == common.Started {
 					l.client.SendKeepAlive(l.stateStore.CurrentTerm())
 					timer = time.NewTimer(l.keepAliveMs)
 				}

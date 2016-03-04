@@ -18,7 +18,8 @@ type NodeFSM struct {
 	rpcCh      chan rpcContext
 	internalCh chan internalRequest // internal events where no response is needed
 
-	termCh chan uint32
+	termResponseCh chan uint32
+	newTermCh      chan uint32
 
 	stopCh chan struct{}
 
@@ -62,7 +63,9 @@ type rpcContext struct {
 	responseChan chan interface{}
 }
 
-func NewNodeFSM(stateStore StateStore, candidate *Candidate, follower *Follower, leader *Leader) *NodeFSM {
+func NewNodeFSM(stateStore StateStore, dispatcher *rpc.ResponseListenerDispatcher,
+	candidate *Candidate, follower *Follower, leader *Leader) *NodeFSM {
+
 	nodeFSM := &NodeFSM{
 		currentState: followerState,
 		stateStore:   stateStore,
@@ -79,6 +82,8 @@ func NewNodeFSM(stateStore StateStore, candidate *Candidate, follower *Follower,
 
 	candidate.SetListener(nodeFSM)
 	follower.SetListener(nodeFSM)
+
+	dispatcher.Subscribe(nodeFSM.termResponseCh)
 
 	return nodeFSM
 }
@@ -185,7 +190,7 @@ func (this *NodeFSM) commonTransitionFor(_state state, internalReqFn func(intern
 		currentTerm := this.stateStore.CurrentTerm()
 
 		if term > currentTerm {
-			this.termCh <- term
+			this.newTermCh <- term
 
 			if this.currentState != followerState { // revert to follower if higher term seen for leader and candidate
 				gt()
@@ -235,6 +240,8 @@ func (this *NodeFSM) asyncStart() {
 		case <-this.stopCh:
 			this.storeNewTerm()
 			return
+		case term := <-this.termResponseCh:
+			this.sendInternalRequest(term, responseReceived)
 		default:
 			currentState, currentStateHandler := this.getCurrent()
 			nextState := currentStateHandler.transition()
@@ -254,7 +261,7 @@ func (this *NodeFSM) asyncStart() {
 func (this *NodeFSM) storeNewTerm() {
 	// see if any greater term occurred while processing a request
 	select {
-	case newTerm := <-this.termCh:
+	case newTerm := <-this.newTermCh:
 		this.stateStore.SaveCurrentTerm(newTerm)
 	default:
 	}
@@ -300,12 +307,8 @@ func (this *NodeFSM) QuorumUnobtained(term uint32) {
 	this.sendInternalRequest(term, quorumUnobtained)
 }
 
-func (this *NodeFSM) ResponseReceived(term uint32) {
-	this.sendInternalRequest(term, responseReceived)
-}
-
-func (this *NodeFSM) RequestVote(vote *rpc.VoteRequest) (<-chan *VoteResponse, <-chan error) {
-	respCh := make(chan *VoteResponse)
+func (this *NodeFSM) RequestVote(vote *rpc.VoteRequest) (<-chan *rpc.VoteResponse, <-chan error) {
+	respCh := make(chan *rpc.VoteResponse)
 	errorCh := this.sendRpcRequest(vote.Term, vote, respCh)
 	return respCh, errorCh
 }

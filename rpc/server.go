@@ -13,11 +13,25 @@ type RequestHandler interface {
 	KeepAlive(req *KeepAliveRequest) (<-chan *KeepAliveResponse, <-chan error)
 }
 
-type server struct {
+type Server struct {
+	grpcServer *grpcServer
+}
+
+func (s *Server) Stop() error {
+	return s.grpcServer.Stop()
+}
+
+func (s *Server) Start() error {
+	return s.grpcServer.Start()
+}
+
+func NewServer(host string, requestHandler RequestHandler) *Server {
+	return &Server{newGrpcServer(host, requestHandler)}
+}
+
+type grpcServer struct {
 	*common.SyncService
 	host string
-
-	counter uint32
 
 	grpcServer *grpc.Server
 	listener   net.Listener
@@ -25,19 +39,19 @@ type server struct {
 	requestHandler RequestHandler
 }
 
-func NewServer(host string, requestHandler RequestHandler) *server {
-	server := &server{host: host, requestHandler: requestHandler}
-	server.SyncService = common.NewSyncService(server.syncStart, server.asyncStart, server.syncStop)
-	return server
+func newGrpcServer(host string, requestHandler RequestHandler) *grpcServer {
+	grpcServer := &grpcServer{host: host, requestHandler: requestHandler}
+	grpcServer.SyncService = common.NewSyncService(grpcServer.syncStart, grpcServer.asyncStart, grpcServer.syncStop)
+	return grpcServer
 }
 
-func (s *server) syncStart() error {
+func (s *grpcServer) syncStart() error {
 	log.Info("Starting rpc server using host:", s.host)
 
 	lis, err := net.Listen("tcp", s.host)
 
 	if err != nil {
-		log.Error("GRpc server failed to start:", err)
+		log.Error("rpc server failed to start:", err)
 		return err
 	} else {
 		grpcServer := grpc.NewServer()
@@ -49,17 +63,17 @@ func (s *server) syncStart() error {
 	}
 }
 
-func (s *server) asyncStart() {
+func (s *grpcServer) asyncStart() {
 	log.Error("Serve error:", s.grpcServer.Serve(s.listener))
 }
 
-func (s *server) syncStop() error {
+func (s *grpcServer) syncStop() error {
 	log.Info("Stopping rpc server")
 	s.grpcServer.Stop()
 	return nil
 }
 
-func (s *server) KeepAlive(ctx context.Context, req *KeepAliveRequest) (*KeepAliveResponse, error) {
+func (s *grpcServer) KeepAlive(ctx context.Context, req *KeepAliveRequest) (*KeepAliveResponse, error) {
 	respCh, errCh := s.requestHandler.KeepAlive(req)
 
 	select {
@@ -70,7 +84,7 @@ func (s *server) KeepAlive(ctx context.Context, req *KeepAliveRequest) (*KeepAli
 	}
 }
 
-func (s *server) ElectLeader(ctx context.Context, req *VoteRequest) (*VoteResponse, error) {
+func (s *grpcServer) ElectLeader(ctx context.Context, req *VoteRequest) (*VoteResponse, error) {
 	respCh, errCh := s.requestHandler.RequestVote(req)
 
 	select {
@@ -81,14 +95,14 @@ func (s *server) ElectLeader(ctx context.Context, req *VoteRequest) (*VoteRespon
 	}
 }
 
-func (s *server) AppendLogEntries(ctx context.Context, req *AppendLogEntryRequest) (*AppendEntryResponse, error) {
+func (s *grpcServer) AppendLogEntries(ctx context.Context, req *AppendLogEntryRequest) (*AppendEntryResponse, error) {
 	return nil, nil
 }
 
-func (s *server) UpdateConfiguration(ctx context.Context, req *AppendConfigEntryRequest) (*AppendEntryResponse, error) {
+func (s *grpcServer) UpdateConfiguration(ctx context.Context, req *AppendConfigEntryRequest) (*AppendEntryResponse, error) {
 	return nil, nil
 }
 
-func (s *server) InstallSnapshot(ctx context.Context, req *InstallSnapshotRequest) (*InstallSnapshotResponse, error) {
+func (s *grpcServer) InstallSnapshot(ctx context.Context, req *InstallSnapshotRequest) (*InstallSnapshotResponse, error) {
 	return nil, nil
 }

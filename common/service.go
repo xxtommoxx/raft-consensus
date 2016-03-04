@@ -21,7 +21,7 @@ const (
 type SyncService struct {
 	mutex  sync.Mutex
 	wg     sync.WaitGroup
-	Status ServiceState
+	status ServiceState
 
 	startFn           func() error
 	startBackgroundFn func()
@@ -30,7 +30,7 @@ type SyncService struct {
 
 func NewSyncService(startFn func() error, startBackgroundFn func(), stopFn func() error) *SyncService {
 	return &SyncService{
-		Status:            Unstarted,
+		status:            Unstarted,
 		startFn:           startFn,
 		startBackgroundFn: startBackgroundFn,
 		stopFn:            stopFn,
@@ -41,14 +41,14 @@ func (s *SyncService) Stop() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.Status == Stopped || s.Status == Unstarted {
+	if s.status == Stopped || s.status == Unstarted {
 		return errors.New("Already stopped or was not started")
 	} else {
 		stopRes := s.stopFn()
 		if s.startBackgroundFn != nil {
 			s.wg.Wait()
 		}
-		s.Status = Stopped
+		s.status = Stopped
 		return stopRes
 	}
 }
@@ -57,7 +57,7 @@ func (s *SyncService) Start() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.Status == Started {
+	if s.status == Started {
 		return errors.New("Already started")
 	} else {
 
@@ -66,6 +66,8 @@ func (s *SyncService) Start() error {
 		if err != nil {
 			return err
 		} else {
+			s.status = Started
+
 			if s.startBackgroundFn != nil {
 				s.wg.Add(1)
 				go func() {
@@ -74,10 +76,13 @@ func (s *SyncService) Start() error {
 				}()
 			}
 
-			s.Status = Started
 			return nil
 		}
 	}
+}
+
+func (s *SyncService) Status() ServiceState { // TODO use atomic read
+	return s.status
 }
 
 func (s *SyncService) WithMutex(fn func()) {

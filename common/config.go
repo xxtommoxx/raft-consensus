@@ -1,10 +1,9 @@
 package common
 
 type Config struct {
-	Self                  NodeConfig
-	Leader                LeaderConfig
-	Peers                 []NodeConfig
-	PerecentOfVotesNeeded float64
+	Self   NodeConfig
+	Leader LeaderConfig
+	Peers  []NodeConfig
 }
 
 type NodeConfig struct {
@@ -12,7 +11,7 @@ type NodeConfig struct {
 	Host string
 }
 type LeaderConfig struct {
-	KeepAliveMs int64
+	KeepAliveMs uint32
 	Timeout     LeaderTimeout
 }
 

@@ -26,6 +26,6 @@ func (s *InMemoryStateStore) VotedFor() *Vote {
 	return s.vote.Load().(*Vote)
 }
 
-func (s *InMemoryStateStore) SaveVotedFor(vote *Vote) {
+func (s *InMemoryStateStore) SaveVote(vote *Vote) {
 	s.vote.Store(vote)
 }

@@ -84,7 +84,7 @@ func (f *Follower) startBackGroundTimer() {
 			}
 		case <-timer.C:
 			f.WithMutex(func() {
-				if f.Status == common.Started && reqCountSinceReset == f.requestCount {
+				if f.Status() == common.Started && reqCountSinceReset == f.requestCount {
 					log.Debug("Leader timer expired")
 
 					f.listener.OnKeepAliveTimeout(f.stateStore.CurrentTerm())

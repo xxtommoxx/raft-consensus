@@ -16,7 +16,8 @@ type StreamVoteResponse struct {
 }
 
 type Client interface {
-	SendRequestVote(term uint32) <-chan VoteResponse
+	common.Service
+	SendRequestVote(term uint32) <-chan *VoteResponse
 	SendKeepAlive(term uint32) <-chan *KeepAliveResponse
 }
 
@@ -36,25 +37,29 @@ type client struct {
 	rpcClients map[string]*gRpcClient // use SyncService withMutex to read / write
 }
 
-func NewClient(listener ResponseListener, rconfig common.NodeConfig, peers ...common.NodeConfig) *client {
-	client := &client{peers: peers, listener: listener}
+func NewClient(listener ResponseListener, config common.NodeConfig, peers ...common.NodeConfig) Client {
+	client := &client{peers: peers, listener: listener, config: config}
 	client.SyncService = common.NewSyncService(client.syncStart, client.asyncStart, client.syncStop)
 	return client
 }
 
 func (c *client) asyncStart() {
-	// numClient := len(c.rpcClients)
+	numClient := len(c.rpcClients)
 
-	// var wg sync.WaitGroup
-	// wg.Add(numClient)
+	var wg sync.WaitGroup
+	wg.Add(numClient)
 
 	for _, r := range c.rpcClients {
 		go func(rpcClient *gRpcClient) {
 			for reqFn := range rpcClient.requestCh {
 				reqFn()
 			}
+
+			wg.Done()
 		}(r)
 	}
+
+	wg.Wait()
 }
 
 func (c *client) syncStop() error {
@@ -84,12 +89,10 @@ func (c *client) closeConnections() error {
 	someFailed := false
 
 	for _, gRpcClient := range c.rpcClients {
-
-		if gRpcClient != nil {
-			if err := gRpcClient.conn.Close(); err != nil {
-				someFailed = true
-				// log
-			}
+		close(gRpcClient.requestCh)
+		if err := gRpcClient.conn.Close(); err != nil {
+			someFailed = true
+			// log
 		}
 	}
 
@@ -98,7 +101,6 @@ func (c *client) closeConnections() error {
 	} else {
 		return nil
 	}
-
 }
 
 func newGRpcClient(peer common.NodeConfig) (*gRpcClient, error) {

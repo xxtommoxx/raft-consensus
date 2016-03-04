@@ -6,12 +6,10 @@ import (
 	"github.com/xxtommoxx/raft-consensus/rpc"
 )
 
-type VoteResponse struct{}
-
 type Candidate struct {
 	*common.SyncService
 
-	quorum   QuorumStrategy
+	quorumOp QuorumStrategyOp
 	listener CandidateListener
 	client   rpc.Client
 
@@ -28,12 +26,12 @@ type noopCandidateListener struct{}
 func (n *noopCandidateListener) QuorumObtained(term uint32)   {}
 func (n *noopCandidateListener) QuorumUnobtained(term uint32) {}
 
-func NewCandidate(stateStore StateStore, client rpc.Client, quorum QuorumStrategy) *Candidate {
+func NewCandidate(stateStore StateStore, client rpc.Client, quorumOp QuorumStrategyOp) *Candidate {
 	c := &Candidate{
 		stateStore: stateStore,
 		listener:   &noopCandidateListener{},
 		client:     client,
-		quorum:     quorum,
+		quorumOp:   quorumOp,
 	}
 
 	c.SyncService = common.NewSyncService(c.syncStart, c.startVote, c.syncStop)
@@ -50,15 +48,25 @@ func (h *Candidate) startVote() {
 
 	log.Println("Starting vote process for term:", currentTerm)
 
-	for res := range h.client.SendRequestVote(currentTerm) {
-		if res.VoteGranted && h.quorum.VoteObtained(currentTerm) {
-			h.listener.QuorumObtained(currentTerm)
-			return
+	qOp := h.quorumOp.Accepted(currentTerm) // vote for itself
+
+	if qOp.IsObtained() {
+		h.listener.QuorumObtained(currentTerm)
+		return
+	} else {
+		for res := range h.client.SendRequestVote(currentTerm) {
+			if res.VoteGranted {
+				if qOp = h.quorumOp.Accepted(currentTerm); qOp.IsObtained() {
+					h.listener.QuorumObtained(currentTerm)
+					return
+				}
+			}
 		}
+
+		log.Debug("Did not obtain needed votes")
+		h.listener.QuorumUnobtained(currentTerm)
 	}
 
-	log.Debug("Did not obtain needed votes")
-	h.listener.QuorumUnobtained(currentTerm)
 }
 
 func (h *Candidate) syncStart() error {
