@@ -67,6 +67,7 @@ func (c *client) syncStop() error {
 }
 
 func (c *client) syncStart() error {
+	log.Info("Start rpc client")
 	rpcClientMap := make(map[string]*gRpcClient)
 
 	for _, peer := range c.peers {

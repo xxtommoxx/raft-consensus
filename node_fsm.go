@@ -3,30 +3,10 @@ package raft
 import (
 	"errors"
 	"fmt"
+	log "github.com/Sirupsen/logrus"
 	"github.com/xxtommoxx/raft-consensus/common"
 	"github.com/xxtommoxx/raft-consensus/rpc"
 )
-
-/**
-	An fsm that contains three states -- leader, follower and candidate.
-	Each state has a non-buffered channel associated for sending incoming requests.
-**/
-type NodeFSM struct {
-	currentState state
-
-	fsm        map[state]stateHandler
-	rpcCh      chan rpcContext
-	internalCh chan internalRequest // internal events where no response is needed
-
-	termResponseCh chan uint32
-	newTermCh      chan uint32
-
-	stopCh chan struct{}
-
-	stateStore StateStore
-
-	*common.SyncService
-}
 
 type state int
 
@@ -63,12 +43,39 @@ type rpcContext struct {
 	responseChan chan interface{}
 }
 
+/**
+	An fsm that contains three states -- leader, follower and candidate.
+	Each state has a non-buffered channel associated for sending incoming requests.
+**/
+type NodeFSM struct {
+	currentState state
+
+	fsm        map[state]stateHandler
+	rpcCh      chan rpcContext
+	internalCh chan internalRequest // internal events where no response is needed
+
+	termResponseCh chan uint32
+	newTermCh      chan uint32
+
+	stopCh chan struct{}
+
+	stateStore StateStore
+
+	*common.SyncService
+}
+
 func NewNodeFSM(stateStore StateStore, dispatcher *rpc.ResponseListenerDispatcher,
 	candidate *Candidate, follower *Follower, leader *Leader) *NodeFSM {
 
 	nodeFSM := &NodeFSM{
 		currentState: followerState,
-		stateStore:   stateStore,
+
+		stateStore: stateStore,
+
+		rpcCh:          make(chan rpcContext),
+		internalCh:     make(chan internalRequest),
+		termResponseCh: make(chan uint32),
+		newTermCh:      make(chan uint32, 1),
 	}
 
 	fsm := map[state]stateHandler{
@@ -86,6 +93,58 @@ func NewNodeFSM(stateStore StateStore, dispatcher *rpc.ResponseListenerDispatche
 	dispatcher.Subscribe(nodeFSM.termResponseCh)
 
 	return nodeFSM
+}
+
+func (this *NodeFSM) syncStart() error {
+	log.Info("Starting node fsm")
+	this.currentState = followerState
+
+	_, currentStateHandler := this.getCurrent()
+
+	currentStateHandler.service.Start()
+
+	this.stopCh = make(chan struct{})
+
+	return nil
+}
+
+func (this *NodeFSM) asyncStart() {
+	for {
+		select {
+		case <-this.stopCh:
+			log.Debug("Shutting down node fsm async start")
+			this.storeNewTerm()
+			return
+		case term := <-this.termResponseCh:
+			this.sendInternalRequest(term, responseReceived)
+		default:
+			currentState, currentStateHandler := this.getCurrent()
+			log.Debug("In current state: ", currentState)
+
+			nextState := currentStateHandler.transition()
+			log.Debug("Transitioned to ", nextState)
+
+			if nextState != currentState {
+				currentStateHandler.service.Stop()
+
+				this.storeNewTerm()
+
+				this.currentState = nextState
+				this.fsm[nextState].service.Start()
+			}
+		}
+	}
+}
+
+func (this *NodeFSM) syncStop() error {
+	log.Debug("Shutting down node fsm")
+
+	_, stateHandler := this.getCurrent()
+	err := stateHandler.service.Stop()
+
+	close(this.stopCh)
+
+	return err
 }
 
 func (this *NodeFSM) candidateHandler(candidate *Candidate) stateHandler {
@@ -142,6 +201,7 @@ func (this *NodeFSM) followerHandler(follower *Follower) stateHandler {
 		func(internalReq internalRequest) state {
 			switch internalReq.event {
 			case leaderTimeout:
+				this.newTermCh <- this.stateStore.CurrentTerm() + 1
 				return candidateState
 			default:
 				return invalidState
@@ -207,6 +267,8 @@ func (this *NodeFSM) commonTransitionFor(_state state, internalReqFn func(intern
 	return func() state {
 		select {
 		case internalRequest := <-this.internalCh:
+			log.Debug("Got internal request: ", internalRequest)
+
 			return termTransition(internalRequest.term,
 				func() {},
 				func() {},
@@ -214,6 +276,8 @@ func (this *NodeFSM) commonTransitionFor(_state state, internalReqFn func(intern
 				func() {})
 
 		case rpcCtx := <-this.rpcCh:
+			log.Debug("Got rpc request: ", rpcCtx.rpc)
+
 			return termTransition(rpcCtx.term,
 				func() {
 					rpcCtx.errorChan <- errors.New(fmt.Sprint("Old Term: %v Current Term: %v", rpcCtx.term, this.stateStore.CurrentTerm()))
@@ -223,37 +287,6 @@ func (this *NodeFSM) commonTransitionFor(_state state, internalReqFn func(intern
 				func() {
 					rpcCtx.errorChan <- errors.New(fmt.Sprintf("Can't handle while in %v state", this.currentState))
 				})
-		}
-	}
-}
-
-func (this *NodeFSM) syncStart() error {
-	this.currentState = followerState
-	this.stopCh = make(chan struct{})
-
-	return nil
-}
-
-func (this *NodeFSM) asyncStart() {
-	for {
-		select {
-		case <-this.stopCh:
-			this.storeNewTerm()
-			return
-		case term := <-this.termResponseCh:
-			this.sendInternalRequest(term, responseReceived)
-		default:
-			currentState, currentStateHandler := this.getCurrent()
-			nextState := currentStateHandler.transition()
-
-			if nextState != currentState {
-				currentStateHandler.service.Stop()
-
-				this.storeNewTerm()
-
-				this.currentState = nextState
-				this.fsm[nextState].service.Start()
-			}
 		}
 	}
 }
@@ -269,15 +302,6 @@ func (this *NodeFSM) storeNewTerm() {
 
 func (this *NodeFSM) getCurrent() (state, stateHandler) {
 	return this.currentState, this.fsm[this.currentState]
-}
-
-func (this *NodeFSM) syncStop() error {
-	_, stateHandler := this.getCurrent()
-	err := stateHandler.service.Stop()
-
-	close(this.stopCh)
-
-	return err
 }
 
 func (this *NodeFSM) processAsync(ctx rpcContext, fn func() (interface{}, error)) {
@@ -300,10 +324,12 @@ func (this *NodeFSM) OnKeepAliveTimeout(term uint32) {
 }
 
 func (this *NodeFSM) QuorumObtained(term uint32) {
+	log.Debug("Quorum obtained for term: ", term)
 	this.sendInternalRequest(term, quorumObtained)
 }
 
 func (this *NodeFSM) QuorumUnobtained(term uint32) {
+	log.Debug("Quorum unobtained for term: ", term)
 	this.sendInternalRequest(term, quorumUnobtained)
 }
 

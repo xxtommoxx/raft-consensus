@@ -28,9 +28,8 @@ type Follower struct {
 
 	timeout      common.LeaderTimeout
 	listener     FollowerListener
-	timeoutRange int64
 	keepAlive    chan int
-	random       rand.Rand
+	random       *rand.Rand
 	requestCount uint64
 
 	stateStore StateStore
@@ -42,6 +41,8 @@ func NewFollower(stateStore StateStore, timeout common.LeaderTimeout) *Follower 
 		listener:   noopFollowerListener{},
 		stateStore: stateStore,
 		timeout:    timeout,
+		keepAlive:  make(chan int),
+		random:     rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 
 	follower.SyncService = common.NewSyncService(follower.syncStart, follower.startBackGroundTimer, follower.syncStop)
@@ -86,7 +87,6 @@ func (f *Follower) startBackGroundTimer() {
 			f.WithMutex(func() {
 				if f.Status() == common.Started && reqCountSinceReset == f.requestCount {
 					log.Debug("Leader timer expired")
-
 					f.listener.OnKeepAliveTimeout(f.stateStore.CurrentTerm())
 				}
 			})
@@ -95,8 +95,9 @@ func (f *Follower) startBackGroundTimer() {
 }
 
 func (h *Follower) leaderTimeout() time.Duration {
-	timeout := time.Duration(h.random.Int63n(h.timeoutRange)+h.timeout.MinMillis) * time.Millisecond
-	log.Debug("Leader timeout:", timeout, "ms")
+	timeoutRange := h.timeout.MaxMillis - h.timeout.MinMillis + 1
+	timeout := time.Duration(h.random.Int63n(timeoutRange)+h.timeout.MinMillis) * time.Millisecond
+	log.Debug("Leader timeout:", timeout)
 	return timeout
 }
 

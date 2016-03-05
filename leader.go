@@ -35,6 +35,7 @@ func NewLeader(keepAliveMs uint32, client rpc.Client, stateStore StateStore) *Le
 }
 
 func (l *Leader) startKeepAliveTimer() {
+	log.Debug("Sending keep alive to peers every ", l.keepAliveMs)
 	timer := time.NewTimer(l.keepAliveMs)
 
 	for {

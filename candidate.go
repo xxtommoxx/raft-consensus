@@ -63,7 +63,6 @@ func (h *Candidate) startVote() {
 			}
 		}
 
-		log.Debug("Did not obtain needed votes")
 		h.listener.QuorumUnobtained(currentTerm)
 	}
 
