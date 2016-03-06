@@ -31,13 +31,13 @@ type client struct {
 	*common.SyncService
 	config common.NodeConfig
 
-	listener ResponseListener
+	listener common.EventListener
 
 	peers      []common.NodeConfig
 	rpcClients map[string]*gRpcClient // use SyncService withMutex to read / write
 }
 
-func NewClient(listener ResponseListener, config common.NodeConfig, peers ...common.NodeConfig) Client {
+func NewClient(listener common.EventListener, config common.NodeConfig, peers ...common.NodeConfig) Client {
 	client := &client{peers: peers, listener: listener, config: config}
 	client.SyncService = common.NewSyncService(client.syncStart, client.asyncStart, client.syncStop)
 	return client
@@ -203,7 +203,7 @@ func (c *client) fanoutRequest(handle requestFunc) fanoutCh {
 				if resp.err != nil {
 					log.Error(resp.err)
 				} else {
-					c.listener.ResponseReceived(resp.term)
+					c.listener.HandleEvent(common.Event{Term: resp.term, EventType: common.ResponseReceived})
 					respCh <- resp.result
 				}
 

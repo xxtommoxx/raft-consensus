@@ -15,19 +15,11 @@ const (
 	timerReset
 )
 
-type FollowerListener interface {
-	OnKeepAliveTimeout(term uint32)
-}
-
-type noopFollowerListener struct{}
-
-func (noopFollowerListener) OnKeepAliveTimeout(term uint32) {}
-
 type Follower struct {
 	*common.SyncService
 
 	timeout      common.LeaderTimeout
-	listener     FollowerListener
+	listener     common.EventListener
 	keepAlive    chan int
 	random       *rand.Rand
 	requestCount uint64
@@ -36,9 +28,9 @@ type Follower struct {
 	voteMutex  sync.Mutex
 }
 
-func NewFollower(stateStore StateStore, timeout common.LeaderTimeout) *Follower {
+func NewFollower(stateStore StateStore, listener common.EventListener, timeout common.LeaderTimeout) *Follower {
 	follower := &Follower{
-		listener:   noopFollowerListener{},
+		listener:   listener,
 		stateStore: stateStore,
 		timeout:    timeout,
 		keepAlive:  make(chan int),
@@ -48,10 +40,6 @@ func NewFollower(stateStore StateStore, timeout common.LeaderTimeout) *Follower 
 	follower.SyncService = common.NewSyncService(follower.syncStart, follower.startBackGroundTimer, follower.syncStop)
 
 	return follower
-}
-
-func (h *Follower) SetListener(listener FollowerListener) {
-	h.listener = listener
 }
 
 func (f *Follower) syncStart() error {
@@ -87,7 +75,7 @@ func (f *Follower) startBackGroundTimer() {
 			f.WithMutex(func() {
 				if f.Status() == common.Started && reqCountSinceReset == f.requestCount {
 					log.Debug("Leader timer expired")
-					f.listener.OnKeepAliveTimeout(f.stateStore.CurrentTerm())
+					f.listener.HandleEvent(common.Event{Term: f.stateStore.CurrentTerm(), EventType: common.LeaderKeepAliveTimeout})
 				}
 			})
 		}

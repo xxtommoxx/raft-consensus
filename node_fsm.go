@@ -17,31 +17,21 @@ const (
 	invalidState
 )
 
-type stateHandler struct {
-	service    common.Service
-	transition func() state
-}
-
-type internalRequest struct {
-	term  uint32
-	event internalEvent
-}
-
-const (
-	leaderTimeout internalEvent = iota
-	quorumObtained
-	quorumUnobtained
-	responseReceived
-)
-
-type internalEvent int
-
 type rpcContext struct {
 	term         uint32
 	rpc          interface{}
 	errorChan    chan error
 	responseChan chan interface{}
 }
+
+type stateHandler struct {
+	service     common.Service
+	handleEvent eventFn
+	handleRpc   rpcFn
+}
+
+type eventFn func(common.Event) state
+type rpcFn func(rpcContext) state
 
 /**
 	An fsm that contains three states -- leader, follower and candidate.
@@ -50,9 +40,10 @@ type rpcContext struct {
 type NodeFSM struct {
 	currentState state
 
-	fsm        map[state]stateHandler
-	rpcCh      chan rpcContext
-	internalCh chan internalRequest // internal events where no response is needed
+	fsm map[state]stateHandler
+
+	rpcCh   chan rpcContext
+	eventCh chan common.Event // internal events where no response is needed
 
 	termResponseCh chan uint32
 	newTermCh      chan uint32
@@ -64,35 +55,165 @@ type NodeFSM struct {
 	*common.SyncService
 }
 
-func NewNodeFSM(stateStore StateStore, dispatcher *rpc.ResponseListenerDispatcher,
-	candidate *Candidate, follower *Follower, leader *Leader) *NodeFSM {
+func NewNodeFSM(stateStore StateStore, dispatcher *common.EventListenerDispatcher,
+	follower *Follower, candidate *Candidate, leader *Leader) *NodeFSM {
 
 	nodeFSM := &NodeFSM{
 		currentState: followerState,
 
 		stateStore: stateStore,
 
-		rpcCh:          make(chan rpcContext),
-		internalCh:     make(chan internalRequest),
-		termResponseCh: make(chan uint32),
-		newTermCh:      make(chan uint32, 1),
+		rpcCh:     make(chan rpcContext),
+		eventCh:   make(chan common.Event),
+		newTermCh: make(chan uint32, 1),
 	}
 
-	fsm := map[state]stateHandler{
+	nodeFSM.SyncService = common.NewSyncService(nodeFSM.syncStart, nodeFSM.asyncStart, nodeFSM.syncStop)
+
+	nodeFSM.fsm = map[state]stateHandler{
 		followerState:  nodeFSM.followerHandler(follower),
 		candidateState: nodeFSM.candidateHandler(candidate),
 		leaderState:    nodeFSM.leaderHandler(leader),
 	}
 
-	nodeFSM.fsm = fsm
-	nodeFSM.SyncService = common.NewSyncService(nodeFSM.syncStart, nodeFSM.asyncStart, nodeFSM.syncStop)
-
-	candidate.SetListener(nodeFSM)
-	follower.SetListener(nodeFSM)
-
-	dispatcher.Subscribe(nodeFSM.termResponseCh)
+	dispatcher.Subscribe(nodeFSM.eventCh) // TODO move this to start method and have an Unsubscribe function when stopping
 
 	return nodeFSM
+}
+
+func (this *NodeFSM) candidateHandler(candidate *Candidate) stateHandler {
+	return this.newStateHandler(
+		candidateState,
+		candidate,
+		func(e common.Event) state {
+			switch e.EventType {
+			case common.QuorumObtained:
+				return leaderState
+			case common.QuorumUnobtained:
+				return followerState
+			default:
+				return invalidState
+			}
+		},
+		func(rpcCtx rpcContext) state {
+			switch rpcCtx.rpc.(type) {
+			default:
+				return invalidState
+			}
+		})
+}
+
+func (this *NodeFSM) leaderHandler(leader *Leader) stateHandler {
+	return this.newStateHandler(
+		leaderState,
+		leader,
+		func(e common.Event) state {
+			return invalidState
+		},
+		func(rpcCtx rpcContext) state {
+			return invalidState
+		})
+}
+
+func (this *NodeFSM) followerHandler(follower *Follower) stateHandler {
+	return this.newStateHandler(
+		followerState,
+		follower,
+		func(e common.Event) state {
+			switch e.EventType {
+			case common.LeaderKeepAliveTimeout:
+				this.newTermCh <- this.stateStore.CurrentTerm() + 1
+				return candidateState
+			default:
+				return invalidState
+			}
+		},
+		func(rpcCtx rpcContext) state {
+			switch req := rpcCtx.rpc.(type) {
+			case *rpc.VoteRequest:
+				this.processAsync(rpcCtx, func() (interface{}, error) { return follower.RequestVote(req) })
+				return followerState
+			case *rpc.KeepAliveRequest:
+				this.processAsync(rpcCtx, func() (interface{}, error) { return follower.KeepAliveRequest(req) })
+				return followerState
+
+			default:
+				return invalidState
+			}
+		})
+}
+
+// Helper functions that reads from the event channel and rpc channel.
+// Handles the term number encountered so that the passed in functions need not
+// be concerned about checking the term number to determine whether or not it can handle it.
+func (n *NodeFSM) newStateHandler(s state, service common.Service,
+	eFn eventFn, rFn rpcFn) stateHandler {
+	return stateHandler{
+		service:     service,
+		handleEvent: n.commonEventHandler(s, eFn),
+		handleRpc:   n.commonRpcHandler(s, rFn),
+	}
+}
+
+func (n *NodeFSM) commonEventHandler(s state, fn eventFn) eventFn {
+	noop := func() {}
+	return func(e common.Event) state {
+		return n.commonTermStateHandler(s,
+			e.Term,
+			noop,
+			noop,
+			func() state { return fn(e) },
+			noop)
+	}
+}
+
+func (this *NodeFSM) commonRpcHandler(s state, fn rpcFn) rpcFn {
+	return func(rpcCtx rpcContext) state {
+		return this.commonTermStateHandler(s,
+			rpcCtx.term,
+			func() {
+				currentTerm := this.stateStore.CurrentTerm()
+				errorMsg := fmt.Sprint("Old Term: %v Current Term: %v", rpcCtx.term, currentTerm)
+				rpcCtx.errorChan <- errors.New(errorMsg)
+			},
+			func() { this.rpcCh <- rpcCtx }, // replay by adding it back to the rpc channel after it has been transitioned to follower
+			func() state { return fn(rpcCtx) },
+			func() {
+				errorMsg := fmt.Sprintf("Can't handle while in %v state", this.currentState)
+				rpcCtx.errorChan <- errors.New(errorMsg)
+			})
+	}
+}
+
+func (this *NodeFSM) commonTermStateHandler(s state, term uint32,
+	lt func(), gt func(), eq func() state,
+	invalidFn func()) state {
+
+	currentTerm := this.stateStore.CurrentTerm()
+	nextState := s
+
+	switch {
+	case term > currentTerm:
+		this.newTermCh <- term
+
+		if this.currentState != followerState { // revert to follower if higher term seen for leader or candidate
+			gt()
+			nextState = followerState
+		}
+
+	case term < currentTerm:
+		lt()
+
+	default:
+		eqNextState := eq()
+		if nextState == invalidState {
+			invalidFn()
+		} else {
+			nextState = eqNextState
+		}
+	}
+
+	return nextState
 }
 
 func (this *NodeFSM) syncStart() error {
@@ -115,24 +236,34 @@ func (this *NodeFSM) asyncStart() {
 			log.Debug("Shutting down node fsm async start")
 			this.storeNewTerm()
 			return
-		case term := <-this.termResponseCh:
-			this.sendInternalRequest(term, responseReceived)
-		default:
-			currentState, currentStateHandler := this.getCurrent()
-			log.Debug("In current state: ", currentState)
+		case e := <-this.eventCh:
+			this.process(func(h stateHandler) state {
+				return h.handleEvent(e)
+			})
 
-			nextState := currentStateHandler.transition()
-			log.Debug("Transitioned to ", nextState)
-
-			if nextState != currentState {
-				currentStateHandler.service.Stop()
-
-				this.storeNewTerm()
-
-				this.currentState = nextState
-				this.fsm[nextState].service.Start()
-			}
+		case rpcCtx := <-this.rpcCh:
+			this.process(func(h stateHandler) state {
+				return h.handleRpc(rpcCtx)
+			})
 		}
+	}
+}
+
+func (this *NodeFSM) process(fn func(stateHandler) state) {
+	currentState, currentStateHandler := this.getCurrent()
+	log.Debug("In current state: ", currentState)
+
+	nextState := fn(currentStateHandler)
+
+	log.Debug("Transitioned to ", nextState)
+
+	if nextState != currentState {
+		currentStateHandler.service.Stop()
+
+		this.storeNewTerm()
+
+		this.currentState = nextState
+		this.fsm[nextState].service.Start()
 	}
 }
 
@@ -145,150 +276,6 @@ func (this *NodeFSM) syncStop() error {
 	close(this.stopCh)
 
 	return err
-}
-
-func (this *NodeFSM) candidateHandler(candidate *Candidate) stateHandler {
-	transition := this.commonTransitionFor(
-		candidateState,
-		func(internalReq internalRequest) state {
-			switch internalReq.event {
-			case quorumObtained:
-				return leaderState
-			case quorumUnobtained:
-				return followerState
-			default:
-				return invalidState
-			}
-		},
-		func(rpcCtx rpcContext) state {
-			switch rpcCtx.rpc.(type) {
-			default:
-				return invalidState
-			}
-		})
-
-	return stateHandler{
-		service:    candidate,
-		transition: transition,
-	}
-}
-
-func (this *NodeFSM) leaderHandler(leader *Leader) stateHandler {
-	transition := this.commonTransitionFor(
-		leaderState,
-		func(internalReq internalRequest) state {
-			switch internalReq.event {
-			default:
-				return invalidState
-			}
-		},
-		func(rpcCtx rpcContext) state {
-			switch rpcCtx.rpc.(type) {
-			default:
-				return invalidState
-			}
-		})
-
-	return stateHandler{
-		service:    leader,
-		transition: transition,
-	}
-}
-
-func (this *NodeFSM) followerHandler(follower *Follower) stateHandler {
-	transition := this.commonTransitionFor(
-		followerState,
-		func(internalReq internalRequest) state {
-			switch internalReq.event {
-			case leaderTimeout:
-				this.newTermCh <- this.stateStore.CurrentTerm() + 1
-				return candidateState
-			default:
-				return invalidState
-			}
-		},
-		func(rpcCtx rpcContext) state {
-			switch req := rpcCtx.rpc.(type) {
-			case *rpc.VoteRequest:
-				this.processAsync(rpcCtx, func() (interface{}, error) { return follower.RequestVote(req) })
-				return followerState
-			case *rpc.KeepAliveRequest:
-				this.processAsync(rpcCtx, func() (interface{}, error) { return follower.KeepAliveRequest(req) })
-				return followerState
-
-			default:
-				return invalidState
-			}
-		})
-
-	return stateHandler{
-		service:    follower,
-		transition: transition,
-	}
-}
-
-// Helper function that reads from the internal channel and rpc channel.
-// Handles the term number encountered so that the passed in functions need not
-// be concerned about checking the term number to determine whether or not it can handle it.
-// If the function returns invalidState then an error message is sent over the rpc's
-// response chan
-func (this *NodeFSM) commonTransitionFor(_state state, internalReqFn func(internalRequest) state,
-	rpcContextFn func(rpcContext) state) func() state {
-
-	termTransition := func(term uint32, lt func(), gt func(), eq func() state, invalidFn func()) state {
-		handleEq := func() state {
-			nextState := eq()
-
-			if nextState == invalidState {
-				invalidFn()
-				return _state
-			} else {
-				return nextState
-			}
-		}
-
-		currentTerm := this.stateStore.CurrentTerm()
-
-		if term > currentTerm {
-			this.newTermCh <- term
-
-			if this.currentState != followerState { // revert to follower if higher term seen for leader and candidate
-				gt()
-				return followerState
-			}
-		} else if term < currentTerm {
-			lt()
-			return _state
-		}
-
-		return handleEq()
-	}
-
-	return func() state {
-		select {
-		case internalRequest := <-this.internalCh:
-			log.Debug("Got internal request: ", internalRequest)
-
-			return termTransition(internalRequest.term,
-				func() {},
-				func() {},
-				func() state { return internalReqFn(internalRequest) },
-				func() {})
-
-		case rpcCtx := <-this.rpcCh:
-			log.Debug("Got rpc request: ", rpcCtx.rpc)
-
-			return termTransition(rpcCtx.term,
-				func() {
-					rpcCtx.errorChan <- errors.New(fmt.Sprint("Old Term: %v Current Term: %v", rpcCtx.term, this.stateStore.CurrentTerm()))
-				},
-				func() { this.rpcCh <- rpcCtx }, // replay by adding it back to the rpc channel after it has been transitioned to follower
-				func() state { return rpcContextFn(rpcCtx) },
-				func() {
-					rpcCtx.errorChan <- errors.New(fmt.Sprintf("Can't handle while in %v state", this.currentState))
-				})
-		}
-	}
 }
 
 func (this *NodeFSM) storeNewTerm() {
@@ -319,20 +306,6 @@ func (this *NodeFSM) processAsync(ctx rpcContext, fn func() (interface{}, error)
 	}()
 }
 
-func (this *NodeFSM) OnKeepAliveTimeout(term uint32) {
-	this.sendInternalRequest(term, leaderTimeout)
-}
-
-func (this *NodeFSM) QuorumObtained(term uint32) {
-	log.Debug("Quorum obtained for term: ", term)
-	this.sendInternalRequest(term, quorumObtained)
-}
-
-func (this *NodeFSM) QuorumUnobtained(term uint32) {
-	log.Debug("Quorum unobtained for term: ", term)
-	this.sendInternalRequest(term, quorumUnobtained)
-}
-
 func (this *NodeFSM) RequestVote(vote *rpc.VoteRequest) (<-chan *rpc.VoteResponse, <-chan error) {
 	respCh := make(chan *rpc.VoteResponse)
 	errorCh := this.sendRpcRequest(vote.Term, vote, respCh)
@@ -342,13 +315,6 @@ func (this *NodeFSM) KeepAlive(req *rpc.KeepAliveRequest) (<-chan *rpc.KeepAlive
 	respCh := make(chan *rpc.KeepAliveResponse)
 	errorCh := this.sendRpcRequest(req.LeaderInfo.Term, req, respCh)
 	return respCh, errorCh
-}
-
-func (this *NodeFSM) sendInternalRequest(term uint32, ie internalEvent) {
-	this.internalCh <- internalRequest{
-		term:  term,
-		event: ie,
-	}
 }
 
 func (this *NodeFSM) sendRpcRequest(term uint32, rpc interface{}, responseChan interface{}) <-chan error {
