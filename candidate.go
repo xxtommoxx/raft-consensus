@@ -51,7 +51,6 @@ func (h *Candidate) startVote() {
 
 		h.listener.HandleEvent(common.Event{Term: currentTerm, EventType: common.QuorumUnobtained})
 	}
-
 }
 
 func (h *Candidate) syncStart() error {

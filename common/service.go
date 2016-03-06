@@ -14,6 +14,7 @@ type ServiceState int
 
 const (
 	Started ServiceState = iota
+	Stopping
 	Stopped
 	Unstarted
 )
@@ -44,6 +45,7 @@ func (s *SyncService) Stop() error {
 	if s.status == Stopped || s.status == Unstarted {
 		return errors.New("Already stopped or was not started")
 	} else {
+		s.status = Stopping
 		stopRes := s.stopFn()
 		if s.startBackgroundFn != nil {
 			s.wg.Wait()

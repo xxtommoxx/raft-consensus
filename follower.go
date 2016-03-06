@@ -6,23 +6,18 @@ import (
 	"github.com/xxtommoxx/raft-consensus/rpc"
 	"math/rand"
 	"sync"
-	"sync/atomic"
 	"time"
-)
-
-const (
-	timerStop = iota
-	timerReset
 )
 
 type Follower struct {
 	*common.SyncService
 
-	timeout      common.LeaderTimeout
-	listener     common.EventListener
-	keepAlive    chan int
-	random       *rand.Rand
-	requestCount uint64
+	timeout  common.LeaderTimeout
+	listener common.EventListener
+	random   *rand.Rand
+
+	resetTimerCh chan struct{}
+	stopCh       chan struct{}
 
 	stateStore StateStore
 	voteMutex  sync.Mutex
@@ -33,7 +28,6 @@ func NewFollower(stateStore StateStore, listener common.EventListener, timeout c
 		listener:   listener,
 		stateStore: stateStore,
 		timeout:    timeout,
-		keepAlive:  make(chan int),
 		random:     rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 
@@ -43,41 +37,31 @@ func NewFollower(stateStore StateStore, listener common.EventListener, timeout c
 }
 
 func (f *Follower) syncStart() error {
+	f.resetTimerCh = make(chan struct{})
+	f.stopCh = make(chan struct{})
+
 	return nil
 }
 
 func (f *Follower) startBackGroundTimer() {
-	f.keepAlive = make(chan int)
-	defer close(f.keepAlive)
-
 	timer := time.NewTimer(f.leaderTimeout())
-
-	var reqCountSinceReset uint64 = atomic.LoadUint64(&f.requestCount)
 
 	for {
 		select {
-		case timerEvent := <-f.keepAlive:
-			if timerEvent == timerStop {
-				log.Debug("Stopping leader timer")
-				timer.Stop()
-				return
-			}
-
-			if timerEvent == timerReset {
-				reqCountSinceReset = atomic.LoadUint64(&f.requestCount)
-
-				duration := f.leaderTimeout()
-				if !timer.Reset(duration) {
-					timer = time.NewTimer(duration)
-				}
+		case <-f.stopCh:
+			timer.Stop()
+			close(f.resetTimerCh)
+			return
+		case <-f.resetTimerCh:
+			duration := f.leaderTimeout()
+			if !timer.Reset(duration) {
+				timer = time.NewTimer(duration)
 			}
 		case <-timer.C:
-			f.WithMutex(func() {
-				if f.Status() == common.Started && reqCountSinceReset == f.requestCount {
-					log.Debug("Leader timer expired")
-					f.listener.HandleEvent(common.Event{Term: f.stateStore.CurrentTerm(), EventType: common.LeaderKeepAliveTimeout})
-				}
-			})
+			if f.Status() == common.Started {
+				log.Debug("Leader timer expired")
+				f.listener.HandleEvent(common.Event{Term: f.stateStore.CurrentTerm(), EventType: common.LeaderKeepAliveTimeout})
+			}
 		}
 	}
 }
@@ -85,22 +69,18 @@ func (f *Follower) startBackGroundTimer() {
 func (h *Follower) leaderTimeout() time.Duration {
 	timeoutRange := h.timeout.MaxMillis - h.timeout.MinMillis + 1
 	timeout := time.Duration(h.random.Int63n(timeoutRange)+h.timeout.MinMillis) * time.Millisecond
-	log.Debug("Leader timeout:", timeout)
+	log.Debug("Using leader timeout:", timeout)
 	return timeout
 }
 
 func (f *Follower) syncStop() error {
-	f.keepAlive <- timerStop
-	f.requestCount = 0
+	close(f.stopCh)
 	return nil
 }
 
 func (f *Follower) resetTimer() {
-	f.WithMutex(func() {
-		log.Debug("Reseting leader timer")
-		f.requestCount++
-		f.keepAlive <- timerReset
-	})
+	log.Debug("Reseting leader timer")
+	f.resetTimerCh <- struct{}{}
 }
 
 func (f *Follower) KeepAliveRequest(req *rpc.KeepAliveRequest) (*rpc.KeepAliveResponse, error) {

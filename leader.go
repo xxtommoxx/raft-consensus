@@ -11,21 +11,16 @@ type Leader struct {
 	*common.SyncService
 
 	keepAliveMs time.Duration
-	stopCh      chan int
+	stopCh      chan struct{}
 
 	client     rpc.Client
 	stateStore StateStore
 }
 
-const (
-	stopLeaderTimer = iota
-)
-
 func NewLeader(keepAliveMs uint32, client rpc.Client, stateStore StateStore) *Leader {
 	l := &Leader{
 		keepAliveMs: time.Duration(keepAliveMs) * time.Millisecond,
 		client:      client,
-		stopCh:      make(chan int),
 		stateStore:  stateStore,
 	}
 
@@ -57,10 +52,11 @@ func (l *Leader) startKeepAliveTimer() {
 }
 
 func (l *Leader) syncStart() error {
+	l.stopCh = make(chan struct{})
 	return nil
 }
 
 func (l *Leader) syncStop() error {
-	l.stopCh <- stopLeaderTimer
+	close(l.stopCh)
 	return nil
 }

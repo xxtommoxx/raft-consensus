@@ -63,7 +63,7 @@ func (c *client) asyncStart() {
 }
 
 func (c *client) syncStop() error {
-	return c.closeConnections() // TODO let each individual client handle
+	return c.closeConnections()
 }
 
 func (c *client) syncStart() error {
@@ -92,8 +92,8 @@ func (c *client) closeConnections() error {
 	for _, gRpcClient := range c.rpcClients {
 		close(gRpcClient.requestCh)
 		if err := gRpcClient.conn.Close(); err != nil {
+			log.Error("Error closing client connection: ", err)
 			someFailed = true
-			// log
 		}
 	}
 
@@ -143,25 +143,21 @@ func (c *client) safeGetRpcClients() map[string]*gRpcClient {
 }
 
 func (c *client) SendRequestVote(term uint32) <-chan *VoteResponse {
-	respCh := c.fanoutRequest(func(r *gRpcClient) response {
+	return c.fanoutRequest(func(r *gRpcClient) response {
 		res, err := r.ElectLeader(context.Background(), &VoteRequest{Term: term, Id: c.config.Id})
 		return response{res.Term, res, err}
 	}).andFoward(func(respCap int) interface{} {
 		return make(chan *VoteResponse, respCap)
-	})
-
-	return respCh.(chan *VoteResponse)
+	}).(chan *VoteResponse)
 }
 
 func (c *client) SendKeepAlive(term uint32) <-chan *KeepAliveResponse {
-	respCh := c.fanoutRequest(func(r *gRpcClient) response {
+	return c.fanoutRequest(func(r *gRpcClient) response {
 		res, err := r.KeepAlive(context.Background(), &KeepAliveRequest{LeaderInfo: c.leaderInfo(term)})
 		return response{res.Term, res, err}
 	}).andFoward(func(respCap int) interface{} {
 		return make(chan *KeepAliveResponse, respCap)
-	})
-
-	return respCh.(chan *KeepAliveResponse)
+	}).(chan *KeepAliveResponse)
 }
 
 // Generic code that fans out requests to the peers.
@@ -175,10 +171,10 @@ type response struct {
 
 type fanoutCh <-chan interface{}
 
-func (c fanoutCh) andFoward(chFn func(int) interface{}) interface{} {
-	respCap := cap(c)
+func (f fanoutCh) andFoward(chFn func(int) interface{}) interface{} {
+	respCap := cap(f)
 	forwardCh := chFn(respCap)
-	common.FowardChan(c, forwardCh)
+	common.FowardChan(f, forwardCh)
 	return forwardCh
 }
 

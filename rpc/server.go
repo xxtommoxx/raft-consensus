@@ -25,7 +25,7 @@ func (s *Server) Start() error {
 	return s.grpcServer.Start()
 }
 
-func NewServer(host string, requestHandler RequestHandler) *Server {
+func NewServer(host string, requestHandler RequestHandler) common.Service {
 	return &Server{newGrpcServer(host, requestHandler)}
 }
 
