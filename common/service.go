@@ -3,6 +3,7 @@ package common
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 )
 
 type Service interface {
@@ -10,7 +11,7 @@ type Service interface {
 	Start() error
 }
 
-type ServiceState int
+type ServiceState int32
 
 const (
 	Started ServiceState = iota
@@ -22,7 +23,7 @@ const (
 type SyncService struct {
 	mutex  sync.Mutex
 	wg     sync.WaitGroup
-	status ServiceState
+	status int32
 
 	startFn           func() error
 	startBackgroundFn func()
@@ -31,7 +32,7 @@ type SyncService struct {
 
 func NewSyncService(startFn func() error, startBackgroundFn func(), stopFn func() error) *SyncService {
 	return &SyncService{
-		status:            Unstarted,
+		status:            int32(Unstarted),
 		startFn:           startFn,
 		startBackgroundFn: startBackgroundFn,
 		stopFn:            stopFn,
@@ -42,15 +43,17 @@ func (s *SyncService) Stop() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.status == Stopped || s.status == Unstarted {
+	status := s.Status()
+
+	if status == Stopped || status == Unstarted {
 		return errors.New("Already stopped or was not started")
 	} else {
-		s.status = Stopping
+		s.status = int32(Stopping)
 		stopRes := s.stopFn()
 		if s.startBackgroundFn != nil {
 			s.wg.Wait()
 		}
-		s.status = Stopped
+		s.status = int32(Stopped)
 		return stopRes
 	}
 }
@@ -59,7 +62,7 @@ func (s *SyncService) Start() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	if s.status == Started {
+	if s.Status() == Started {
 		return errors.New("Already started")
 	} else {
 
@@ -68,7 +71,7 @@ func (s *SyncService) Start() error {
 		if err != nil {
 			return err
 		} else {
-			s.status = Started
+			s.status = int32(Started)
 
 			if s.startBackgroundFn != nil {
 				s.wg.Add(1)
@@ -83,8 +86,8 @@ func (s *SyncService) Start() error {
 	}
 }
 
-func (s *SyncService) Status() ServiceState { // TODO use atomic read
-	return s.status
+func (s *SyncService) Status() ServiceState {
+	return ServiceState(atomic.LoadInt32(&s.status))
 }
 
 func (s *SyncService) WithMutex(fn func()) {
