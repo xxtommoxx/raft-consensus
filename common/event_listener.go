@@ -11,6 +11,20 @@ const (
 	ResponseReceived
 )
 
+func (e EventType) String() string {
+	switch e {
+	case LeaderKeepAliveTimeout:
+		return "LeaderKeepAliveTimeout"
+	case QuorumObtained:
+		return "QuorumObtained"
+	case QuorumUnobtained:
+		return "QuorumUnobtained"
+	case ResponseReceived:
+		return "ResponseReceived"
+	}
+	return "Unknown event type"
+}
+
 type Event struct {
 	Term      uint32
 	EventType EventType
@@ -35,7 +49,7 @@ func (r *EventListenerDispatcher) Subscribe(ch chan<- Event) {
 	r.dispatchers = append(r.dispatchers, ch)
 }
 
-func (r *EventListenerDispatcher) Event(e Event) {
+func (r *EventListenerDispatcher) HandleEvent(e Event) {
 	for _, d := range r.dispatchers { // TODO use atomic read
 		go func() {
 			d <- e

@@ -2,10 +2,12 @@ package raft
 
 import (
 	"fmt"
+	log "github.com/Sirupsen/logrus"
 	"github.com/xxtommoxx/raft-consensus/common"
 	"github.com/xxtommoxx/raft-consensus/rpc"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // todo: replace with raft bootstrap class
@@ -15,7 +17,7 @@ type fixture struct {
 	fsm    *NodeFSM
 }
 
-func (fixture) start() {
+func (f fixture) start() {
 	f.client.Start()
 	f.server.Start()
 	f.fsm.Start()
@@ -46,16 +48,16 @@ func makeNodes(numNodes int) []fixture {
 	for i, cfg := range makeConfigs(nodeConfigs) {
 		peerConfigs := removeAt(i, nodeConfigs).([]common.NodeConfig)
 
-		responseListenerDispatcher := rpc.NewResponseListenerDispatcher()
-		client := rpc.NewClient(responseListenerDispatcher, cfg.Self, peerConfigs...)
+		eventDispatcher := common.NewEventListenerDispatcher()
+		client := rpc.NewClient(eventDispatcher, cfg.Self, peerConfigs...)
 
 		stateStore := NewInMemoryStateStore()
 
-		follower := NewFollower(stateStore, cfg.Leader.Timeout)
+		follower := NewFollower(stateStore, eventDispatcher, cfg.Leader.Timeout)
 		leader := NewLeader(cfg.Leader.KeepAliveMs, client, stateStore)
-		candidate := NewCandidate(stateStore, client, NewMajorityStrategyOp(numNodes))
+		candidate := NewCandidate(stateStore, client, eventDispatcher, NewMajorityStrategyOp(numNodes))
 
-		fsm := NewNodeFSM(stateStore, responseListenerDispatcher, candidate, follower, leader)
+		fsm := NewNodeFSM(stateStore, eventDispatcher, follower, candidate, leader)
 
 		server := rpc.NewServer(cfg.Self.Host, fsm)
 
@@ -105,4 +107,12 @@ func makeConfigs(nodeConfigs []common.NodeConfig) []common.Config {
 }
 
 func TestOneLeaderActive(t *testing.T) {
+	log.SetLevel(log.DebugLevel)
+
+	n := makeNodes(1)
+	n[0].start()
+
+	time.Sleep(10 * time.Second)
+
+	n[0].stop()
 }

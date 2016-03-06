@@ -1,7 +1,5 @@
 package raft
 
-import log "github.com/Sirupsen/logrus"
-
 // represents an immutable quorum operation on a request of some sort
 type QuorumStrategyOp interface {
 	Accepted(term uint32) QuorumStrategyOp
@@ -22,7 +20,6 @@ func NewMajorityStrategyOp(numPeers int) QuorumStrategyOp {
 }
 
 func (c *MajorityStrategyOp) IsObtained() bool {
-	log.Debug("HIDI HO", c.numPeers, c.votesObtained)
 	return (c.numPeers == 1 && c.votesObtained == 1) || (c.votesObtained == (c.numPeers/2)+1)
 }
 

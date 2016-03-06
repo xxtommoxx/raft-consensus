@@ -17,6 +17,21 @@ const (
 	invalidState
 )
 
+func (s state) String() string {
+	switch s {
+	case leaderState:
+		return "leader"
+	case followerState:
+		return "follower"
+	case candidateState:
+		return "candidate"
+	case invalidState:
+		return "invalid"
+	}
+
+	return "unknown"
+}
+
 type rpcContext struct {
 	term         uint32
 	rpc          interface{}
@@ -237,11 +252,13 @@ func (this *NodeFSM) asyncStart() {
 			this.storeNewTerm()
 			return
 		case e := <-this.eventCh:
+			log.Debug("Received event:", e)
 			this.process(func(h stateHandler) state {
 				return h.handleEvent(e)
 			})
 
 		case rpcCtx := <-this.rpcCh:
+			log.Debug("Received rpc:", rpcCtx.rpc)
 			this.process(func(h stateHandler) state {
 				return h.handleRpc(rpcCtx)
 			})
@@ -255,10 +272,9 @@ func (this *NodeFSM) process(fn func(stateHandler) state) {
 
 	nextState := fn(currentStateHandler)
 
-	log.Debug("Transitioned to ", nextState)
-
 	if nextState != currentState {
 		currentStateHandler.service.Stop()
+		log.Debug("Transitioned to ", nextState)
 
 		this.storeNewTerm()
 
@@ -272,6 +288,7 @@ func (this *NodeFSM) syncStop() error {
 
 	_, stateHandler := this.getCurrent()
 	err := stateHandler.service.Stop()
+	log.Debug("Shut down state handler complete")
 
 	close(this.stopCh)
 

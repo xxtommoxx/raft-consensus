@@ -43,6 +43,7 @@ func (l *Leader) startKeepAliveTimer() {
 		case <-l.stopCh: // currently there is only a stop timer event
 			log.Debug("Stopping keep alive timer")
 			timer.Stop()
+			return
 		case <-timer.C:
 			l.WithMutex(func() {
 				if l.Status() == common.Started {
