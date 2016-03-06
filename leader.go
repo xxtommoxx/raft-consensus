@@ -40,12 +40,10 @@ func (l *Leader) startKeepAliveTimer() {
 			timer.Stop()
 			return
 		case <-timer.C:
-			l.WithMutex(func() {
-				if l.Status() == common.Started {
-					l.client.SendKeepAlive(l.stateStore.CurrentTerm())
-					timer = time.NewTimer(l.keepAliveMs)
-				}
-			})
+			if l.Status() == common.Started {
+				l.client.SendKeepAlive(l.stateStore.CurrentTerm())
+				timer = time.NewTimer(l.keepAliveMs)
+			}
 		}
 	}
 
