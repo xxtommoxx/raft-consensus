@@ -35,22 +35,31 @@ type EventListener interface {
 }
 
 type EventListenerDispatcher struct {
-	mutex       sync.Mutex
-	dispatchers []chan<- Event
+	mutex       sync.RWMutex
+	dispatchers map[chan<- Event]struct{}
 }
 
 func NewEventListenerDispatcher() *EventListenerDispatcher {
-	return &EventListenerDispatcher{dispatchers: []chan<- Event{}}
+	return &EventListenerDispatcher{dispatchers: make(map[chan<- Event]struct{})}
 }
 
 func (r *EventListenerDispatcher) Subscribe(ch chan<- Event) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
-	r.dispatchers = append(r.dispatchers, ch)
+	r.dispatchers[ch] = struct{}{}
+}
+
+func (r *EventListenerDispatcher) Unsubscribe(ch chan<- Event) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	delete(r.dispatchers, ch)
 }
 
 func (r *EventListenerDispatcher) HandleEvent(e Event) {
-	for _, d := range r.dispatchers { // TODO use atomic read
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	for d, _ := range r.dispatchers {
 		go func() {
 			d <- e
 		}()

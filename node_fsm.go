@@ -65,6 +65,7 @@ type NodeFSM struct {
 	stopCh chan struct{}
 
 	stateStore StateStore
+	dispatcher *common.EventListenerDispatcher
 
 	*common.SyncService
 }
@@ -76,6 +77,7 @@ func NewNodeFSM(stateStore StateStore, dispatcher *common.EventListenerDispatche
 		currentState: followerState,
 
 		stateStore: stateStore,
+		dispatcher: dispatcher,
 
 		rpcCh:     make(chan rpcContext),
 		eventCh:   make(chan common.Event),
@@ -89,8 +91,6 @@ func NewNodeFSM(stateStore StateStore, dispatcher *common.EventListenerDispatche
 		candidateState: nodeFSM.candidateHandler(candidate),
 		leaderState:    nodeFSM.leaderHandler(leader),
 	}
-
-	dispatcher.Subscribe(nodeFSM.eventCh) // TODO move n to start method and have an Unsubscribe function when stopping
 
 	return nodeFSM
 }
@@ -235,6 +235,7 @@ func (n *NodeFSM) syncStart() error {
 	currentStateHandler.service.Start()
 
 	n.stopCh = make(chan struct{})
+	n.dispatcher.Subscribe(n.eventCh)
 
 	return nil
 }
@@ -286,6 +287,7 @@ func (n *NodeFSM) syncStop() error {
 	log.Debug("Shut down state handler complete")
 
 	close(n.stopCh)
+	n.dispatcher.Unsubscribe(n.eventCh)
 
 	return err
 }
