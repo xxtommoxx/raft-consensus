@@ -1,47 +1,61 @@
 package raft
 
-// represents an immutable quorum operation on a request of some sort
-type QuorumStrategyOp interface {
-	Accepted(term uint32) QuorumStrategyOp
+type QuorumStrategy interface {
+	NewOp(term uint32) QuorumOp
+}
+
+type QuorumOp interface {
 	IsObtained() bool
+	VoteReceived(term uint32)
 }
 
-type MajorityStrategyOp struct {
+type MajorityStrategy struct {
 	numPeers int
-
-	votesObtained int
-	term          uint32
 }
 
-func NewMajorityStrategyOp(numPeers int) QuorumStrategyOp {
-	return &MajorityStrategyOp{
+func NewMajorityStrategy(numPeers int) QuorumStrategy {
+	return &MajorityStrategy{
 		numPeers: numPeers,
 	}
 }
 
-func (c *MajorityStrategyOp) IsObtained() bool {
-	return (c.numPeers == 1 && c.votesObtained == 1) || (c.votesObtained == (c.numPeers/2)+1)
+func (c *MajorityStrategy) votesNeeded() int {
+	if c.numPeers == 1 {
+		return 1
+	} else {
+		return (c.numPeers / 2) + 1
+	}
 }
 
-func (c *MajorityStrategyOp) Accepted(term uint32) QuorumStrategyOp {
-	if c.term == 0 || c.term >= term {
-		return &MajorityStrategyOp{
-			numPeers:      c.numPeers,
-			term:          term,
-			votesObtained: c.votesObtained + 1,
+func (c *MajorityStrategy) NewOp(term uint32) QuorumOp {
+	votes := 0
+	greaterTerm := false
+
+	op := struct{ OpHelper }{}
+	op.IsObtainedFn = func() bool {
+		return !greaterTerm && (c.votesNeeded() == 1 || c.votesNeeded() <= votes)
+	}
+	op.VoteReceivedFn = func(vTerm uint32) {
+		if vTerm > term {
+			greaterTerm = true
+		} else {
+			votes++
 		}
-	} else {
-		return alwaysFalseStrategy{}
 	}
 
+	return op
 }
 
-type alwaysFalseStrategy struct{}
-
-func (alwaysFalseStrategy) Accepted(term uint32) QuorumStrategyOp {
-	return alwaysFalseStrategy{}
+// allows implementing QuorumOp 'anonymously'
+type OpHelper struct {
+	IsObtainedFn   func() bool
+	VoteReceivedFn func(uint32)
 }
 
-func (alwaysFalseStrategy) IsObtained() bool {
-	return false
+func (o OpHelper) IsObtained() bool {
+	return o.IsObtainedFn()
+}
+
+func (o OpHelper) VoteReceived(term uint32) {
+	o.VoteReceivedFn(term)
 }

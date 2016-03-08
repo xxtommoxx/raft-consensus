@@ -9,19 +9,19 @@ import (
 type Candidate struct {
 	*common.SyncService
 
-	quorumOp QuorumStrategyOp
-	listener common.EventListener
-	client   rpc.Client
+	quorumStrategy QuorumStrategy
+	listener       common.EventListener
+	client         rpc.Client
 
 	stateStore StateStore
 }
 
-func NewCandidate(stateStore StateStore, client rpc.Client, listener common.EventListener, quorumOp QuorumStrategyOp) *Candidate {
+func NewCandidate(stateStore StateStore, client rpc.Client, listener common.EventListener, quorumStrategy QuorumStrategy) *Candidate {
 	c := &Candidate{
-		stateStore: stateStore,
-		listener:   listener,
-		client:     client,
-		quorumOp:   quorumOp,
+		stateStore:     stateStore,
+		listener:       listener,
+		client:         client,
+		quorumStrategy: quorumStrategy,
 	}
 
 	c.SyncService = common.NewSyncService(c.syncStart, c.startVote, c.syncStop)
@@ -34,15 +34,16 @@ func (h *Candidate) startVote() {
 
 	log.Println("Starting vote process for term:", currentTerm)
 
-	qOp := h.quorumOp.Accepted(currentTerm) // vote for itself
+	qOp := h.quorumStrategy.NewOp(currentTerm)
 
 	if qOp.IsObtained() {
 		h.listener.HandleEvent(common.Event{Term: currentTerm, EventType: common.QuorumObtained})
-		return
 	} else {
 		for res := range h.client.SendRequestVote(currentTerm) {
 			if res.VoteGranted {
-				if qOp = h.quorumOp.Accepted(currentTerm); qOp.IsObtained() {
+				qOp.VoteReceived(res.Term)
+
+				if qOp.IsObtained() {
 					h.listener.HandleEvent(common.Event{Term: currentTerm, EventType: common.QuorumObtained})
 					return
 				}
