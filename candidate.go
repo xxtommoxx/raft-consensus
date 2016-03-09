@@ -61,3 +61,8 @@ func (h *Candidate) syncStart() error {
 func (h *Candidate) syncStop() error {
 	return nil
 }
+
+// a candidate never grants votes for anyone
+func (*Candidate) RequestVote(req *rpc.VoteRequest) (bool, error) {
+	return false, nil
+}

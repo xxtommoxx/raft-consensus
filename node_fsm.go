@@ -110,7 +110,13 @@ func (n *NodeFSM) candidateHandler(candidate *Candidate) stateHandler {
 			}
 		},
 		func(rpcCtx rpcContext) state {
-			return invalidState
+			switch req := rpcCtx.rpc.(type) {
+			case *rpc.VoteRequest:
+				n.processAsync(rpcCtx, func() (interface{}, error) { return candidate.RequestVote(req) })
+				return candidateState
+			default:
+				return invalidState
+			}
 		})
 }
 

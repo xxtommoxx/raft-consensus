@@ -115,17 +115,15 @@ func newGRpcClient(peer common.NodeConfig) (*gRpcClient, error) {
 
 			if sErr != nil {
 				return nil, sErr
-			} else {
-				if s == grpc.TransientFailure {
-					return nil, errors.New(fmt.Sprintf("Failed to establish initial connection for host %v", peer.Host))
-				} else if s == grpc.Ready {
-					return &gRpcClient{conn: conn, RpcServiceClient: NewRpcServiceClient(conn), requestCh: make(chan func())}, nil
-				}
+			} else if s == grpc.Ready {
+				return &gRpcClient{conn: conn, RpcServiceClient: NewRpcServiceClient(conn), requestCh: make(chan func())}, nil
 
+			} else {
 				time.Sleep(500 * time.Millisecond)
 			}
 		}
-		return nil, errors.New("Initial connection failed to go to state READY")
+
+		return nil, errors.New(fmt.Sprintf("Failed to establish initial connection for host %v", peer.Host))
 	}
 }
 
