@@ -25,8 +25,8 @@ func (s *Server) Start() error {
 	return s.grpcServer.Start()
 }
 
-func NewServer(host string, requestHandler RequestHandler) common.Service {
-	return &Server{newGrpcServer(host, requestHandler)}
+func NewServer(host string, requestHandler RequestHandler, stateStore common.StateStore) common.Service {
+	return &Server{newGrpcServer(host, requestHandler, stateStore)}
 }
 
 type grpcServer struct {
@@ -37,10 +37,11 @@ type grpcServer struct {
 	listener   net.Listener
 
 	requestHandler RequestHandler
+	stateStore     common.StateStore
 }
 
-func newGrpcServer(host string, requestHandler RequestHandler) *grpcServer {
-	grpcServer := &grpcServer{host: host, requestHandler: requestHandler}
+func newGrpcServer(host string, requestHandler RequestHandler, stateStore common.StateStore) *grpcServer {
+	grpcServer := &grpcServer{host: host, requestHandler: requestHandler, stateStore: stateStore}
 	grpcServer.SyncService = common.NewSyncService(grpcServer.syncStart, grpcServer.asyncStart, grpcServer.syncStop)
 	return grpcServer
 }
@@ -80,7 +81,8 @@ func (s *grpcServer) KeepAlive(ctx context.Context, req *KeepAliveRequest) (*Kee
 	case resp := <-respCh:
 		return resp, nil
 	case err := <-errCh:
-		return nil, err
+		log.Errorf("Problem processing keep alive: %v", err)
+		return &KeepAliveResponse{Term: s.stateStore.CurrentTerm()}, nil
 	}
 }
 
@@ -91,6 +93,7 @@ func (s *grpcServer) ElectLeader(ctx context.Context, req *VoteRequest) (*VoteRe
 	case resp := <-respCh:
 		return resp, nil
 	case err := <-errCh:
+		log.Errorf("Problem processing vote: %v", err)
 		return nil, err
 	}
 }

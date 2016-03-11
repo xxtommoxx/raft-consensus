@@ -19,11 +19,11 @@ type Follower struct {
 	resetTimerCh chan struct{}
 	stopCh       chan struct{}
 
-	stateStore StateStore
+	stateStore common.StateStore
 	voteMutex  sync.Mutex
 }
 
-func NewFollower(stateStore StateStore, listener common.EventListener, timeout common.LeaderTimeout) *Follower {
+func NewFollower(stateStore common.StateStore, listener common.EventListener, timeout common.LeaderTimeout) *Follower {
 	follower := &Follower{
 		listener:   listener,
 		stateStore: stateStore,
@@ -88,17 +88,25 @@ func (f *Follower) KeepAliveRequest(req *rpc.KeepAliveRequest) (*rpc.KeepAliveRe
 	return &rpc.KeepAliveResponse{Term: f.stateStore.CurrentTerm()}, nil
 }
 
-func (f *Follower) RequestVote(req *rpc.VoteRequest) (bool, error) {
+func (f *Follower) RequestVote(req *rpc.VoteRequest) (*rpc.VoteResponse, error) {
 	f.resetTimer()
 
 	log.Debug("Vote request received:", req)
 
+	voteGranted := false
+
 	votedFor := f.stateStore.VotedFor()
 	if votedFor == nil || votedFor.Term < req.Term || (votedFor.Term == req.Term && votedFor.NodeId == req.Id) {
-		vote := Vote{req.Term, req.Id}
+		vote := common.Vote{req.Term, req.Id}
 		f.stateStore.SaveVote(&vote)
 		log.Debug("Granted vote for:", req)
-		return true, nil
+		voteGranted = true
 	}
-	return false, nil
+
+	resp := &rpc.VoteResponse{
+		Term:        f.stateStore.CurrentTerm(),
+		VoteGranted: voteGranted,
+	}
+
+	return resp, nil
 }

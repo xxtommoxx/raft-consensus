@@ -3,7 +3,7 @@ package raft
 import (
 	"errors"
 	"fmt"
-	log "github.com/Sirupsen/logrus"
+	"github.com/Sirupsen/logrus"
 	"github.com/xxtommoxx/raft-consensus/common"
 	"github.com/xxtommoxx/raft-consensus/rpc"
 )
@@ -33,10 +33,9 @@ func (s state) String() string {
 }
 
 type rpcContext struct {
-	term         uint32
-	rpc          interface{}
-	errorChan    chan error
-	responseChan chan interface{}
+	term      uint32
+	rpc       interface{}
+	forwardCh *common.ForwardChan
 }
 
 type stateHandler struct {
@@ -59,19 +58,20 @@ type NodeFSM struct {
 	rpcCh   chan rpcContext
 	eventCh chan common.Event
 
-	termResponseCh chan uint32
-	newTermCh      chan uint32
+	newTermCh chan uint32
 
 	stopCh chan struct{}
 
-	stateStore StateStore
+	stateStore common.StateStore
 	dispatcher *common.EventListenerDispatcher
 
 	*common.SyncService
+
+	log *logrus.Entry
 }
 
-func NewNodeFSM(stateStore StateStore, dispatcher *common.EventListenerDispatcher,
-	follower *Follower, candidate *Candidate, leader *Leader) *NodeFSM {
+func NewNodeFSM(stateStore common.StateStore, dispatcher *common.EventListenerDispatcher,
+	follower *Follower, candidate *Candidate, leader *Leader, id string) *NodeFSM {
 
 	nodeFSM := &NodeFSM{
 		currentState: followerState,
@@ -82,6 +82,10 @@ func NewNodeFSM(stateStore StateStore, dispatcher *common.EventListenerDispatche
 		rpcCh:     make(chan rpcContext),
 		eventCh:   make(chan common.Event),
 		newTermCh: make(chan uint32, 1),
+
+		log: logrus.WithFields(logrus.Fields{
+			"id": id,
+		}),
 	}
 
 	nodeFSM.SyncService = common.NewSyncService(nodeFSM.syncStart, nodeFSM.asyncStart, nodeFSM.syncStop)
@@ -102,6 +106,7 @@ func (n *NodeFSM) candidateHandler(candidate *Candidate) stateHandler {
 		func(e common.Event) state {
 			switch e.EventType {
 			case common.QuorumObtained:
+				n.log.Println("Quorum obtained")
 				return leaderState
 			case common.QuorumUnobtained:
 				return followerState
@@ -112,7 +117,9 @@ func (n *NodeFSM) candidateHandler(candidate *Candidate) stateHandler {
 		func(rpcCtx rpcContext) state {
 			switch req := rpcCtx.rpc.(type) {
 			case *rpc.VoteRequest:
-				n.processAsync(rpcCtx, func() (interface{}, error) { return candidate.RequestVote(req) })
+				n.processAsync(rpcCtx, func() (interface{}, error) {
+					return candidate.RequestVote(req)
+				})
 				return candidateState
 			default:
 				return invalidState
@@ -151,6 +158,7 @@ func (n *NodeFSM) followerHandler(follower *Follower) stateHandler {
 				n.processAsync(rpcCtx, func() (interface{}, error) { return follower.RequestVote(req) })
 				return followerState
 			case *rpc.KeepAliveRequest:
+				n.log.Debug("PROCESSING ASYNC")
 				n.processAsync(rpcCtx, func() (interface{}, error) { return follower.KeepAliveRequest(req) })
 				return followerState
 			default:
@@ -189,14 +197,16 @@ func (n *NodeFSM) commonRpcHandler(s state, fn rpcFn) rpcFn {
 			rpcCtx.term,
 			func() {
 				currentTerm := n.stateStore.CurrentTerm()
-				errorMsg := fmt.Sprint("Old Term: %v Current Term: %v", rpcCtx.term, currentTerm)
-				rpcCtx.errorChan <- errors.New(errorMsg)
+				errorMsg := fmt.Sprintf("Old Term: %v Current Term: %v", rpcCtx.term, currentTerm)
+				rpcCtx.forwardCh.ErrorCh <- errors.New(errorMsg)
 			},
-			func() { n.rpcCh <- rpcCtx }, // replay by adding it back to the rpc channel after it has been transitioned to follower
+			func() {
+				go func() { n.rpcCh <- rpcCtx }()
+			}, // replay by adding it back to the rpc channel after it has been transitioned to follower
 			func() state { return fn(rpcCtx) },
 			func() {
 				errorMsg := fmt.Sprintf("Can't handle %v while in %v state", rpcCtx.rpc, n.currentState)
-				rpcCtx.errorChan <- errors.New(errorMsg)
+				rpcCtx.forwardCh.ErrorCh <- errors.New(errorMsg)
 			})
 	}
 }
@@ -211,18 +221,16 @@ func (n *NodeFSM) commonTermStateHandler(s state, term uint32,
 	switch {
 	case term > currentTerm:
 		n.newTermCh <- term
+		gt()
 
-		if n.currentState != followerState { // revert to follower if higher term seen for leader or candidate
-			gt()
-			nextState = followerState
-		}
+		nextState = followerState
 
 	case term < currentTerm:
 		lt()
 
 	default:
 		eqNextState := eq()
-		if nextState == invalidState {
+		if eqNextState == invalidState {
 			invalidFn()
 		} else {
 			nextState = eqNextState
@@ -233,7 +241,7 @@ func (n *NodeFSM) commonTermStateHandler(s state, term uint32,
 }
 
 func (n *NodeFSM) syncStart() error {
-	log.Info("Starting node fsm")
+	n.log.Info("Starting node fsm")
 	n.currentState = followerState
 
 	_, currentStateHandler := n.getCurrent()
@@ -250,17 +258,17 @@ func (n *NodeFSM) asyncStart() {
 	for {
 		select {
 		case <-n.stopCh:
-			log.Debug("Shutting down node fsm async start")
+			n.log.Debug("Shutting down node fsm async start")
 			n.storeNewTerm()
 			return
 		case e := <-n.eventCh:
-			log.Debug("Received event:", e)
+			n.log.Debugf("Received event: %+v", e)
 			n.process(func(h stateHandler) state {
 				return h.handleEvent(e)
 			})
 
 		case rpcCtx := <-n.rpcCh:
-			log.Debug("Received rpc:", rpcCtx.rpc)
+			n.log.Debugf("Received rpc: %#v", rpcCtx.rpc)
 			n.process(func(h stateHandler) state {
 				return h.handleRpc(rpcCtx)
 			})
@@ -270,27 +278,30 @@ func (n *NodeFSM) asyncStart() {
 
 func (n *NodeFSM) process(fn func(stateHandler) state) {
 	currentState, currentStateHandler := n.getCurrent()
-	log.Debug("In current state: ", currentState)
+	n.log.Debug("In current state: ", currentState)
 
 	nextState := fn(currentStateHandler)
 
 	if nextState != currentState {
+		n.log.Debug("Stopping service state")
 		currentStateHandler.service.Stop()
-		log.Debug("Transitioned to ", nextState)
+		n.log.Debug("Transitioned to ", nextState)
 
 		n.storeNewTerm()
 
 		n.currentState = nextState
 		n.fsm[nextState].service.Start()
+	} else {
+		n.storeNewTerm()
 	}
 }
 
 func (n *NodeFSM) syncStop() error {
-	log.Debug("Shutting down node fsm")
+	n.log.Debug("Shutting down node fsm")
 
 	_, stateHandler := n.getCurrent()
 	err := stateHandler.service.Stop()
-	log.Debug("Shut down state handler complete")
+	n.log.Debug("Shut down state handler complete")
 
 	close(n.stopCh)
 	n.dispatcher.Unsubscribe(n.eventCh)
@@ -313,15 +324,15 @@ func (n *NodeFSM) getCurrent() (state, stateHandler) {
 
 func (n *NodeFSM) processAsync(ctx rpcContext, fn func() (interface{}, error)) {
 	go func() {
+		defer ctx.forwardCh.Close()
+
 		result, err := fn()
 
-		defer close(ctx.errorChan)
-		defer close(ctx.responseChan)
-
 		if err != nil {
-			ctx.errorChan <- err
+			ctx.forwardCh.ErrorCh <- err
 		} else {
-			ctx.responseChan <- result
+			n.log.Debugf("Sending response: %#v", result)
+			ctx.forwardCh.SourceCh <- result
 		}
 	}()
 }
@@ -338,16 +349,16 @@ func (n *NodeFSM) KeepAlive(req *rpc.KeepAliveRequest) (<-chan *rpc.KeepAliveRes
 }
 
 func (n *NodeFSM) sendRpcRequest(term uint32, rpc interface{}, responseChan interface{}) <-chan error {
-	errorCh := make(chan error)
+
+	f := common.ForwardWithErrorCh(responseChan)
 
 	go func() {
 		n.rpcCh <- rpcContext{
-			term:         term,
-			rpc:          rpc,
-			errorChan:    make(chan error),
-			responseChan: common.ToForwardedChan(responseChan),
+			term:      term,
+			rpc:       rpc,
+			forwardCh: common.ForwardWithErrorCh(responseChan),
 		}
 	}()
 
-	return errorCh
+	return f.ErrorCh
 }

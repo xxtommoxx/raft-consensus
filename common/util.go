@@ -1,31 +1,63 @@
 package common
 
-import "reflect"
+import (
+	"reflect"
+)
 
-func FowardChan(src <-chan interface{}, toCh interface{}) {
-	fowardChanHelper(src, reflect.ValueOf(toCh))
+type ForwardChan struct {
+	ErrorCh   chan error
+	SourceCh  chan interface{}
+	toChValue reflect.Value
 }
 
-func ToForwardedChan(toCh interface{}) chan interface{} {
+func NewForwardChan(src chan interface{}, toCh interface{}) *ForwardChan {
+	f := &ForwardChan{
+		SourceCh:  src,
+		toChValue: reflect.ValueOf(toCh),
+	}
+
+	f.forward()
+
+	return f
+}
+
+func ForwardWithErrorCh(toCh interface{}) *ForwardChan {
 	toChValue := reflect.ValueOf(toCh)
-	src := make(chan interface{}, toChValue.Cap())
-	fowardChanHelper(src, toChValue)
-	return src
+
+	f := &ForwardChan{
+		ErrorCh:   make(chan error),
+		SourceCh:  make(chan interface{}, toChValue.Cap()),
+		toChValue: toChValue,
+	}
+
+	f.forward()
+
+	return f
 }
 
-func fowardChanHelper(src <-chan interface{}, to reflect.Value) {
+func (f *ForwardChan) Close() {
+	close(f.SourceCh)
+}
+
+func (f *ForwardChan) closeRemaining() {
+	f.toChValue.Close()
+	if f.ErrorCh != nil {
+		close(f.ErrorCh)
+	}
+}
+
+func (f *ForwardChan) forward() {
 	go func() {
-		defer to.Close()
+		defer f.closeRemaining()
 
 		for {
-			x, ok := <-src
+			x, ok := <-f.SourceCh
 
 			if ok {
-				to.Send(reflect.ValueOf(x))
+				f.toChValue.Send(reflect.ValueOf(x))
 			} else {
 				return
 			}
-
 		}
 	}()
 }

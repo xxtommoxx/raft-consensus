@@ -167,12 +167,12 @@ type response struct {
 	err    error
 }
 
-type fanoutCh <-chan interface{}
+type fanoutCh chan interface{}
 
 func (f fanoutCh) andFoward(chFn func(int) interface{}) interface{} {
 	respCap := cap(f)
 	forwardCh := chFn(respCap)
-	common.FowardChan(f, forwardCh)
+	common.NewForwardChan(f, forwardCh)
 	return forwardCh
 }
 
@@ -182,10 +182,10 @@ func (c *client) fanoutRequest(handle requestFunc) fanoutCh {
 
 	var wg sync.WaitGroup
 	wg.Add(numClients)
-	respCh := make(chan interface{}, numClients)
+	fanout := make(chan interface{}, numClients)
 
 	go func() {
-		defer close(respCh)
+		defer close(fanout)
 		wg.Wait()
 	}()
 
@@ -198,7 +198,7 @@ func (c *client) fanoutRequest(handle requestFunc) fanoutCh {
 					log.Error(resp.err)
 				} else {
 					c.listener.HandleEvent(common.Event{Term: resp.term, EventType: common.ResponseReceived})
-					respCh <- resp.result
+					fanout <- resp.result
 				}
 
 				wg.Done()
@@ -206,5 +206,5 @@ func (c *client) fanoutRequest(handle requestFunc) fanoutCh {
 		}(r)
 	}
 
-	return respCh
+	return fanout
 }

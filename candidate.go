@@ -13,10 +13,10 @@ type Candidate struct {
 	listener       common.EventListener
 	client         rpc.Client
 
-	stateStore StateStore
+	stateStore common.StateStore
 }
 
-func NewCandidate(stateStore StateStore, client rpc.Client, listener common.EventListener, quorumStrategy QuorumStrategy) *Candidate {
+func NewCandidate(stateStore common.StateStore, client rpc.Client, listener common.EventListener, quorumStrategy QuorumStrategy) *Candidate {
 	c := &Candidate{
 		stateStore:     stateStore,
 		listener:       listener,
@@ -63,6 +63,10 @@ func (h *Candidate) syncStop() error {
 }
 
 // a candidate never grants votes for anyone
-func (*Candidate) RequestVote(req *rpc.VoteRequest) (bool, error) {
-	return false, nil
+func (c *Candidate) RequestVote(req *rpc.VoteRequest) (*rpc.VoteResponse, error) {
+	resp := &rpc.VoteResponse{
+		Term:        c.stateStore.CurrentTerm(),
+		VoteGranted: false,
+	}
+	return resp, nil
 }

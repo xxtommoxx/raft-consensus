@@ -1,4 +1,4 @@
-package raft
+package common
 
 import (
 	"sync/atomic"
@@ -11,7 +11,9 @@ type InMemoryStateStore struct {
 }
 
 func NewInMemoryStateStore() *InMemoryStateStore {
-	return &InMemoryStateStore{}
+	store := &InMemoryStateStore{}
+	store.vote.Store(&Vote{})
+	return store
 }
 
 func (s *InMemoryStateStore) CurrentTerm() uint32 {

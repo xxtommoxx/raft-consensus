@@ -13,13 +13,13 @@ import (
 // todo: replace with raft bootstrap class
 type fixture struct {
 	client rpc.Client
-	server *rpc.Server
+	server common.Service
 	fsm    *NodeFSM
 }
 
 func (f fixture) start() {
-	f.client.Start()
 	f.server.Start()
+	f.client.Start()
 	f.fsm.Start()
 }
 
@@ -51,15 +51,15 @@ func makeNodes(numNodes int) []fixture {
 		eventDispatcher := common.NewEventListenerDispatcher()
 		client := rpc.NewClient(eventDispatcher, cfg.Self, peerConfigs...)
 
-		stateStore := NewInMemoryStateStore()
+		stateStore := common.NewInMemoryStateStore()
 
 		follower := NewFollower(stateStore, eventDispatcher, cfg.Leader.Timeout)
 		leader := NewLeader(cfg.Leader.KeepAliveMs, client, stateStore)
-		candidate := NewCandidate(stateStore, client, eventDispatcher, NewMajorityStrategyOp(numNodes))
+		candidate := NewCandidate(stateStore, client, eventDispatcher, NewMajorityStrategy(numNodes))
 
-		fsm := NewNodeFSM(stateStore, eventDispatcher, follower, candidate, leader)
+		fsm := NewNodeFSM(stateStore, eventDispatcher, follower, candidate, leader, cfg.Self.Id)
 
-		server := rpc.NewServer(cfg.Self.Host, fsm)
+		server := rpc.NewServer(cfg.Self.Host, fsm, stateStore)
 
 		fixtures[i] = fixture{
 			client: client,
@@ -93,10 +93,10 @@ func makeConfigs(nodeConfigs []common.NodeConfig) []common.Config {
 		configs[i] = common.Config{
 			Self: nodeCfg,
 			Leader: common.LeaderConfig{
-				KeepAliveMs: 10,
+				KeepAliveMs: 100,
 				Timeout: common.LeaderTimeout{
-					MaxMillis: 30,
-					MinMillis: 20,
+					MaxMillis: 1000,
+					MinMillis: 500,
 				},
 			},
 			Peers: removeAt(i, nodeConfigs).([]common.NodeConfig),
@@ -107,12 +107,19 @@ func makeConfigs(nodeConfigs []common.NodeConfig) []common.Config {
 }
 
 func TestOneLeaderActive(t *testing.T) {
-	log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.InfoLevel)
 
-	n := makeNodes(1)
-	n[0].start()
+	n := makeNodes(2)
+	go func() {
+		n[0].start()
 
-	time.Sleep(10 * time.Second)
+	}()
+
+	go func() {
+		n[1].start()
+
+	}()
+	time.Sleep(100000 * time.Second)
 
 	n[0].stop()
 }

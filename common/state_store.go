@@ -1,4 +1,4 @@
-package raft
+package common
 
 type Vote struct {
 	Term   uint32

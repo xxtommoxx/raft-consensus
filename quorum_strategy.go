@@ -28,7 +28,7 @@ func (c *MajorityStrategy) votesNeeded() int {
 }
 
 func (c *MajorityStrategy) NewOp(term uint32) QuorumOp {
-	votes := 0
+	votes := 1
 	greaterTerm := false
 
 	op := struct{ OpHelper }{}

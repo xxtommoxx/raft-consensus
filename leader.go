@@ -14,10 +14,10 @@ type Leader struct {
 	stopCh      chan struct{}
 
 	client     rpc.Client
-	stateStore StateStore
+	stateStore common.StateStore
 }
 
-func NewLeader(keepAliveMs uint32, client rpc.Client, stateStore StateStore) *Leader {
+func NewLeader(keepAliveMs uint32, client rpc.Client, stateStore common.StateStore) *Leader {
 	l := &Leader{
 		keepAliveMs: time.Duration(keepAliveMs) * time.Millisecond,
 		client:      client,
@@ -30,7 +30,7 @@ func NewLeader(keepAliveMs uint32, client rpc.Client, stateStore StateStore) *Le
 }
 
 func (l *Leader) startKeepAliveTimer() {
-	log.Debug("Sending keep alive to peers every ", l.keepAliveMs)
+	log.Info("Sending keep alive to peers every ", l.keepAliveMs)
 	timer := time.NewTimer(l.keepAliveMs)
 
 	for {
@@ -42,6 +42,7 @@ func (l *Leader) startKeepAliveTimer() {
 		case <-timer.C:
 			if l.Status() == common.Started {
 				l.client.SendKeepAlive(l.stateStore.CurrentTerm())
+
 				timer = time.NewTimer(l.keepAliveMs)
 			}
 		}
