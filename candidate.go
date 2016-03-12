@@ -61,12 +61,3 @@ func (h *Candidate) syncStart() error {
 func (h *Candidate) syncStop() error {
 	return nil
 }
-
-// a candidate never grants votes for anyone
-func (c *Candidate) RequestVote(req *rpc.VoteRequest) (*rpc.VoteResponse, error) {
-	resp := &rpc.VoteResponse{
-		Term:        c.stateStore.CurrentTerm(),
-		VoteGranted: false,
-	}
-	return resp, nil
-}

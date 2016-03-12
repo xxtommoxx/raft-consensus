@@ -17,16 +17,26 @@ type fixture struct {
 	fsm    *NodeFSM
 }
 
+func panicIfError(err error) {
+	if err != nil {
+		panic(err)
+	}
+
+}
+
 func (f fixture) start() {
-	f.server.Start()
-	f.client.Start()
-	f.fsm.Start()
+	panicIfError(f.server.Start())
+	panicIfError(f.client.Start())
+	panicIfError(f.fsm.Start())
 }
 
 func (f fixture) stop() {
-	f.client.Stop()
-	f.server.Stop()
-	f.fsm.Stop()
+	panicIfError(f.client.Stop())
+	log.Info("Stopped client")
+	panicIfError(f.server.Stop())
+	log.Info("Stopped server")
+	panicIfError(f.fsm.Stop())
+	log.Info("Stopped fsm")
 }
 
 func removeAt(index int, slice interface{}) interface{} {
@@ -93,7 +103,7 @@ func makeConfigs(nodeConfigs []common.NodeConfig) []common.Config {
 		configs[i] = common.Config{
 			Self: nodeCfg,
 			Leader: common.LeaderConfig{
-				KeepAliveMs: 100,
+				KeepAliveMs: 10,
 				Timeout: common.LeaderTimeout{
 					MaxMillis: 1000,
 					MinMillis: 500,
@@ -109,7 +119,8 @@ func makeConfigs(nodeConfigs []common.NodeConfig) []common.Config {
 func TestOneLeaderActive(t *testing.T) {
 	log.SetLevel(log.InfoLevel)
 
-	n := makeNodes(2)
+	n := makeNodes(3)
+
 	go func() {
 		n[0].start()
 
@@ -119,7 +130,17 @@ func TestOneLeaderActive(t *testing.T) {
 		n[1].start()
 
 	}()
-	time.Sleep(100000 * time.Second)
 
+	go func() {
+		n[2].start()
+
+	}()
+
+	time.Sleep(20 * time.Second)
 	n[0].stop()
+	time.Sleep(10 * time.Second)
+	log.Info("Starting....")
+	n[0].start()
+	time.Sleep(1000 * time.Second)
+
 }

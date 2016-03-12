@@ -41,7 +41,10 @@ func (l *Leader) startKeepAliveTimer() {
 			return
 		case <-timer.C:
 			if l.Status() == common.Started {
-				l.client.SendKeepAlive(l.stateStore.CurrentTerm())
+				for x := range l.client.SendKeepAlive(l.stateStore.CurrentTerm()) {
+					var _ = x
+
+				}
 
 				timer = time.NewTimer(l.keepAliveMs)
 			}

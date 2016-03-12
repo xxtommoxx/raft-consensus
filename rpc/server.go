@@ -94,7 +94,7 @@ func (s *grpcServer) ElectLeader(ctx context.Context, req *VoteRequest) (*VoteRe
 		return resp, nil
 	case err := <-errCh:
 		log.Errorf("Problem processing vote: %v", err)
-		return nil, err
+		return &VoteResponse{Term: s.stateStore.CurrentTerm(), VoteGranted: false}, nil
 	}
 }
 

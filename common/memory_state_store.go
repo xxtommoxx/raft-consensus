@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 )
 
-// Mainly for testing
+// Mainly for testing -- thread safe in terms of memory visibility
 type InMemoryStateStore struct {
 	currentTerm uint32
 	vote        atomic.Value

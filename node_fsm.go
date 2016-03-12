@@ -58,8 +58,6 @@ type NodeFSM struct {
 	rpcCh   chan rpcContext
 	eventCh chan common.Event
 
-	newTermCh chan uint32
-
 	stopCh chan struct{}
 
 	stateStore common.StateStore
@@ -79,9 +77,8 @@ func NewNodeFSM(stateStore common.StateStore, dispatcher *common.EventListenerDi
 		stateStore: stateStore,
 		dispatcher: dispatcher,
 
-		rpcCh:     make(chan rpcContext),
-		eventCh:   make(chan common.Event),
-		newTermCh: make(chan uint32, 1),
+		rpcCh:   make(chan rpcContext),
+		eventCh: make(chan common.Event),
 
 		log: logrus.WithFields(logrus.Fields{
 			"id": id,
@@ -106,21 +103,30 @@ func (n *NodeFSM) candidateHandler(candidate *Candidate) stateHandler {
 		func(e common.Event) state {
 			switch e.EventType {
 			case common.QuorumObtained:
-				n.log.Println("Quorum obtained")
+				n.log.Println("Quorum for being leader obtained")
 				return leaderState
+
 			case common.QuorumUnobtained:
+				n.log.Println("Quorum for being leader unobtained")
 				return followerState
+
 			default:
 				return invalidState
 			}
 		},
 		func(rpcCtx rpcContext) state {
-			switch req := rpcCtx.rpc.(type) {
+			switch rpcCtx.rpc.(type) {
 			case *rpc.VoteRequest:
 				n.processAsync(rpcCtx, func() (interface{}, error) {
-					return candidate.RequestVote(req)
+					resp := &rpc.VoteResponse{ // Candidate is requesting votes for the same term as this incoming VoteRequest
+						Term:        n.stateStore.CurrentTerm(),
+						VoteGranted: false,
+					}
+
+					return resp, nil
 				})
 				return candidateState
+
 			default:
 				return invalidState
 			}
@@ -146,8 +152,10 @@ func (n *NodeFSM) followerHandler(follower *Follower) stateHandler {
 		func(e common.Event) state {
 			switch e.EventType {
 			case common.LeaderKeepAliveTimeout:
-				n.newTermCh <- n.stateStore.CurrentTerm() + 1
+				newTerm := n.stateStore.CurrentTerm() + 1
+				n.stateStore.SaveCurrentTerm(newTerm)
 				return candidateState
+
 			default:
 				return invalidState
 			}
@@ -157,10 +165,11 @@ func (n *NodeFSM) followerHandler(follower *Follower) stateHandler {
 			case *rpc.VoteRequest:
 				n.processAsync(rpcCtx, func() (interface{}, error) { return follower.RequestVote(req) })
 				return followerState
+
 			case *rpc.KeepAliveRequest:
-				n.log.Debug("PROCESSING ASYNC")
 				n.processAsync(rpcCtx, func() (interface{}, error) { return follower.KeepAliveRequest(req) })
 				return followerState
+
 			default:
 				return invalidState
 			}
@@ -186,7 +195,16 @@ func (n *NodeFSM) commonEventHandler(s state, fn eventFn) eventFn {
 			e.Term,
 			noop,
 			noop,
-			func() state { return fn(e) },
+			func() state {
+				switch e.EventType {
+				case common.ResponseReceived:
+					return s
+
+				default:
+					return fn(e)
+				}
+			},
+
 			noop)
 	}
 }
@@ -200,9 +218,9 @@ func (n *NodeFSM) commonRpcHandler(s state, fn rpcFn) rpcFn {
 				errorMsg := fmt.Sprintf("Old Term: %v Current Term: %v", rpcCtx.term, currentTerm)
 				rpcCtx.forwardCh.ErrorCh <- errors.New(errorMsg)
 			},
-			func() {
+			func() { // replay by adding it back to the rpc channel after it has been transitioned to follower
 				go func() { n.rpcCh <- rpcCtx }()
-			}, // replay by adding it back to the rpc channel after it has been transitioned to follower
+			},
 			func() state { return fn(rpcCtx) },
 			func() {
 				errorMsg := fmt.Sprintf("Can't handle %v while in %v state", rpcCtx.rpc, n.currentState)
@@ -219,14 +237,16 @@ func (n *NodeFSM) commonTermStateHandler(s state, term uint32,
 	nextState := s
 
 	switch {
-	case term > currentTerm:
-		n.newTermCh <- term
-		gt()
-
-		nextState = followerState
-
 	case term < currentTerm:
 		lt()
+
+	case term > currentTerm:
+		n.stateStore.SaveCurrentTerm(term)
+
+		if s != followerState {
+			gt()
+			nextState = followerState
+		}
 
 	default:
 		eqNextState := eq()
@@ -241,8 +261,9 @@ func (n *NodeFSM) commonTermStateHandler(s state, term uint32,
 }
 
 func (n *NodeFSM) syncStart() error {
-	n.log.Info("Starting node fsm")
 	n.currentState = followerState
+
+	n.log.Info("Starting NodeFSM in:", n.currentState) // TODO retrive the state of fsm from state store
 
 	_, currentStateHandler := n.getCurrent()
 
@@ -251,6 +272,8 @@ func (n *NodeFSM) syncStart() error {
 	n.stopCh = make(chan struct{})
 	n.dispatcher.Subscribe(n.eventCh)
 
+	n.log.Info("Start NodeFSM complete")
+
 	return nil
 }
 
@@ -258,9 +281,9 @@ func (n *NodeFSM) asyncStart() {
 	for {
 		select {
 		case <-n.stopCh:
-			n.log.Debug("Shutting down node fsm async start")
-			n.storeNewTerm()
+			n.log.Debug("Shutting down NodeFSM asyncStart")
 			return
+
 		case e := <-n.eventCh:
 			n.log.Debugf("Received event: %+v", e)
 			n.process(func(h stateHandler) state {
@@ -278,26 +301,23 @@ func (n *NodeFSM) asyncStart() {
 
 func (n *NodeFSM) process(fn func(stateHandler) state) {
 	currentState, currentStateHandler := n.getCurrent()
-	n.log.Debug("In current state: ", currentState)
+
+	n.log.Debugf("In current state: %v", currentState)
 
 	nextState := fn(currentStateHandler)
 
+	n.log.Debugf("Next state: %v", nextState)
+
 	if nextState != currentState {
-		n.log.Debug("Stopping service state")
 		currentStateHandler.service.Stop()
-		n.log.Debug("Transitioned to ", nextState)
-
-		n.storeNewTerm()
-
+		n.log.Info("Transitioned to ", nextState)
 		n.currentState = nextState
 		n.fsm[nextState].service.Start()
-	} else {
-		n.storeNewTerm()
 	}
 }
 
 func (n *NodeFSM) syncStop() error {
-	n.log.Debug("Shutting down node fsm")
+	n.log.Info("Shutting down NodeFSM")
 
 	_, stateHandler := n.getCurrent()
 	err := stateHandler.service.Stop()
@@ -306,16 +326,9 @@ func (n *NodeFSM) syncStop() error {
 	close(n.stopCh)
 	n.dispatcher.Unsubscribe(n.eventCh)
 
-	return err
-}
+	n.log.Info("Shutdown NodeFSM complete")
 
-func (n *NodeFSM) storeNewTerm() {
-	// see if any greater term occurred while processing a request
-	select {
-	case newTerm := <-n.newTermCh:
-		n.stateStore.SaveCurrentTerm(newTerm)
-	default:
-	}
+	return err
 }
 
 func (n *NodeFSM) getCurrent() (state, stateHandler) {
@@ -342,6 +355,7 @@ func (n *NodeFSM) RequestVote(vote *rpc.VoteRequest) (<-chan *rpc.VoteResponse, 
 	errorCh := n.sendRpcRequest(vote.Term, vote, respCh)
 	return respCh, errorCh
 }
+
 func (n *NodeFSM) KeepAlive(req *rpc.KeepAliveRequest) (<-chan *rpc.KeepAliveResponse, <-chan error) {
 	respCh := make(chan *rpc.KeepAliveResponse)
 	errorCh := n.sendRpcRequest(req.LeaderInfo.Term, req, respCh)
