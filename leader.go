@@ -12,7 +12,9 @@ type Leader struct {
 
 	keepAliveMs time.Duration
 
-	client     rpc.Client
+	client        rpc.Client
+	clientSession rpc.ClientSession
+
 	stateStore common.StateStore
 }
 
@@ -42,7 +44,7 @@ func (l *Leader) startKeepAliveTimer() {
 			return
 		case <-timer.C:
 			if l.Status() == common.Started {
-				l.client.SendKeepAlive(currentTerm, l.StopCh)
+				l.clientSession.SendKeepAlive(currentTerm, l.StopCh)
 				timer = time.NewTimer(l.keepAliveMs)
 			}
 		}
@@ -50,9 +52,12 @@ func (l *Leader) startKeepAliveTimer() {
 }
 
 func (l *Leader) syncStart() error {
+	l.clientSession = l.client.NewSession()
 	return nil
 }
 
 func (l *Leader) syncStop() error {
+	l.clientSession.Terminate()
+	l.clientSession = nil
 	return nil
 }

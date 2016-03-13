@@ -11,7 +11,9 @@ type Candidate struct {
 
 	quorumStrategy QuorumStrategy
 	listener       common.EventListener
-	client         rpc.Client
+
+	client        rpc.Client
+	clientSession rpc.ClientSession
 
 	stateStore common.StateStore
 }
@@ -43,7 +45,7 @@ func (h *Candidate) startVote() {
 	if qOp.IsObtained() {
 		h.listener.HandleEvent(eventFn(common.QuorumObtained))
 	} else {
-		for res := range h.client.SendRequestVote(currentTerm, h.StopCh) {
+		for res := range h.clientSession.SendRequestVote(currentTerm, h.StopCh) {
 			if op := qOp.VoteReceived(res.Term()); op.IsObtained() {
 				h.listener.HandleEvent(eventFn(common.QuorumObtained))
 				return
@@ -55,9 +57,12 @@ func (h *Candidate) startVote() {
 }
 
 func (h *Candidate) syncStart() error {
+	h.clientSession = h.client.NewSession()
 	return nil
 }
 
 func (h *Candidate) syncStop() error {
+	h.clientSession.Terminate()
+	h.clientSession = nil
 	return nil
 }

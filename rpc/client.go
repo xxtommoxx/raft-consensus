@@ -8,74 +8,46 @@ import (
 	"sync"
 )
 
-type Client interface {
-	common.Service
+type ClientSession interface {
 	SendRequestVote(term uint32, cancelCh chan struct{}) <-chan *VoteResponse
 	SendKeepAlive(term uint32, cancelCh chan struct{}) <-chan *KeepAliveResponse
+	Terminate()
 }
 
-type grpcClientCh struct {
-	gClient   *grpcClient
-	requestCh chan func()
-}
-
-func (g *grpcClientCh) stop() error {
-	close(g.requestCh)
-	return g.gClient.Stop()
-}
-
-type client struct {
+type Client struct {
 	*common.SyncService
 	config common.NodeConfig
 
 	listener common.EventListener
 
-	peers    []common.NodeConfig
-	gClients map[string]*grpcClientCh
+	peers       []common.NodeConfig
+	grpcClients map[string]*grpcClient
+
+	sessions []ClientSession
 }
 
 func NewClient(listener common.EventListener, config common.NodeConfig,
-	peers ...common.NodeConfig) Client {
+	peers ...common.NodeConfig) *Client {
 
-	client := &client{
+	client := &Client{
 		peers:    peers,
 		listener: listener,
 		config:   config,
 	}
 
-	client.SyncService = common.NewSyncService(client.syncStart, client.asyncStart, client.syncStop)
+	client.SyncService = common.NewSyncService(client.syncStart, nil, client.syncStop)
 	return client
 }
 
-func (c *client) asyncStart() {
-	gClients := c.safeGetRpcClients()
-
-	numClient := len(gClients)
-
-	var wg sync.WaitGroup
-	wg.Add(numClient)
-
-	for _, r := range gClients {
-		go func(gClientCh *grpcClientCh) {
-			for reqFn := range gClientCh.requestCh {
-				reqFn()
-			}
-
-			wg.Done()
-		}(r)
-	}
-
-	wg.Wait()
-}
-
-func (c *client) syncStop() error {
+func (c *Client) syncStop() error {
+	c.closeSessions()
 	return c.stopGrpcClients()
 }
 
-func (c *client) syncStart() error {
+func (c *Client) syncStart() error {
 	log.Info("Start client")
 
-	gClients := make(map[string]*grpcClientCh)
+	grpcClients := make(map[string]*grpcClient)
 
 	for _, peer := range c.peers {
 		grpcClient := newGrpcClient(c.config.Id, peer)
@@ -84,25 +56,28 @@ func (c *client) syncStart() error {
 			log.Errorf("Failed to start for client: %v - error: %v", peer, err)
 			return c.stopGrpcClients()
 		} else {
-			gClients[peer.Id] = &grpcClientCh{
-				gClient:   grpcClient,
-				requestCh: make(chan func()),
-			}
+			grpcClients[peer.Id] = grpcClient
 		}
 	}
 
-	c.gClients = gClients
+	c.grpcClients = grpcClients
 
 	log.Info("Start client complete")
 
 	return nil
 }
 
-func (c *client) stopGrpcClients() error {
+func (c *Client) closeSessions() {
+	for _, sess := range c.sessions {
+		sess.Terminate()
+	}
+}
+
+func (c *Client) stopGrpcClients() error {
 	someFailed := false
 
-	for _, gClient := range c.gClients {
-		if err := gClient.stop(); err != nil {
+	for _, g := range c.grpcClients {
+		if err := g.Stop(); err != nil {
 			log.Error("Error stopping: %v", err)
 			someFailed = true
 		}
@@ -115,16 +90,82 @@ func (c *client) stopGrpcClients() error {
 	}
 }
 
-func (c *client) safeGetRpcClients() map[string]*grpcClientCh {
-	return c.WithMutexReturning(func() interface{} {
-		return c.gClients
-	}).(map[string]*grpcClientCh)
+func (c *Client) NewSession() ClientSession {
+	return newClientSession(c.grpcClients, c.listener)
 }
 
-func (c *client) SendRequestVote(term uint32, cancelCh chan struct{}) <-chan *VoteResponse {
+type peerClient struct {
+	*grpcClient
+	requestCh chan func()
+}
+
+type clientSession struct {
+	terminateCh chan struct{}
+	peerClients map[string]*peerClient
+	listener    common.EventListener
+}
+
+func newClientSession(grpcClients map[string]*grpcClient, listener common.EventListener) *clientSession {
+	peerClients := make(map[string]*peerClient)
+
+	for id, gClient := range grpcClients {
+		peerClients[id] = newPeerClient(gClient)
+	}
+
+	c := &clientSession{
+		terminateCh: make(chan struct{}),
+		listener:    listener,
+		peerClients: peerClients,
+	}
+
+	go c.processPeerRequests()
+	go c.watchForTerminate()
+
+	return c
+}
+
+func newPeerClient(gClient *grpcClient) *peerClient {
+	return &peerClient{
+		grpcClient: gClient,
+		requestCh:  make(chan func()),
+	}
+}
+
+func (c *clientSession) watchForTerminate() {
+	<-c.terminateCh
+
+	for _, r := range c.peerClients {
+		close(r.requestCh)
+	}
+}
+
+func (c *clientSession) processPeerRequests() {
+	numClient := len(c.peerClients)
+
+	var wg sync.WaitGroup
+	wg.Add(numClient)
+
+	for _, r := range c.peerClients {
+		go func(p *peerClient) {
+			for reqFn := range p.requestCh {
+				reqFn()
+			}
+
+			wg.Done()
+		}(r)
+	}
+
+	wg.Wait()
+}
+
+func (c *clientSession) Terminate() {
+	close(c.terminateCh)
+}
+
+func (c *clientSession) SendRequestVote(term uint32, cancelCh chan struct{}) <-chan *VoteResponse {
 	fanOutFn := func(cap int) *fanout {
-		reqFn := func(r *grpcClientCh) (Response, error) {
-			return r.gClient.requestVote(term)
+		reqFn := func(r *peerClient) (Response, error) {
+			return r.requestVote(term)
 		}
 
 		return newFanout(reqFn, make(chan *VoteResponse, cap))
@@ -133,10 +174,10 @@ func (c *client) SendRequestVote(term uint32, cancelCh chan struct{}) <-chan *Vo
 	return c.fanoutRequest(fanOutFn, cancelCh).(chan *VoteResponse)
 }
 
-func (c *client) SendKeepAlive(term uint32, cancelCh chan struct{}) <-chan *KeepAliveResponse {
+func (c *clientSession) SendKeepAlive(term uint32, cancelCh chan struct{}) <-chan *KeepAliveResponse {
 	fanOutFn := func(cap int) *fanout {
-		reqFn := func(r *grpcClientCh) (Response, error) {
-			return r.gClient.keepAlive(term)
+		reqFn := func(r *peerClient) (Response, error) {
+			return r.keepAlive(term)
 		}
 
 		return newFanout(reqFn, make(chan *KeepAliveResponse, cap))
@@ -147,19 +188,19 @@ func (c *client) SendKeepAlive(term uint32, cancelCh chan struct{}) <-chan *Keep
 
 // Generic code that fans out requests to the peers.
 type fanout struct {
-	reqFn  func(*grpcClientCh) (Response, error)
+	reqFn  func(*peerClient) (Response, error)
 	respCh reflect.Value
 }
 
-func newFanout(reqFn func(*grpcClientCh) (Response, error), respCh interface{}) *fanout {
+func newFanout(reqFn func(*peerClient) (Response, error), respCh interface{}) *fanout {
 	return &fanout{
 		reqFn:  reqFn,
 		respCh: reflect.ValueOf(respCh),
 	}
 }
 
-func (c *client) fanoutRequest(fanoutFn func(int) *fanout, cancelCh chan struct{}) interface{} {
-	rpcClients := c.safeGetRpcClients()
+func (c *clientSession) fanoutRequest(fanoutFn func(int) *fanout, cancelCh chan struct{}) interface{} {
+	rpcClients := c.peerClients
 	numClients := len(rpcClients)
 
 	f := fanoutFn(numClients)
@@ -184,11 +225,11 @@ func (c *client) fanoutRequest(fanoutFn func(int) *fanout, cancelCh chan struct{
 	}()
 
 	for _, r := range rpcClients {
-		go func(gClientCh *grpcClientCh) {
+		go func(p *peerClient) {
 			defer wg.Done()
 
-			gClientCh.requestCh <- func() {
-				resp, err := f.reqFn(gClientCh)
+			p.requestCh <- func() {
+				resp, err := f.reqFn(p)
 
 				if err != nil {
 					log.Warn(err)
