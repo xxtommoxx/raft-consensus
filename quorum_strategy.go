@@ -6,7 +6,7 @@ type QuorumStrategy interface {
 
 type QuorumOp interface {
 	IsObtained() bool
-	VoteReceived(term uint32)
+	VoteReceived(term uint32) QuorumOp
 }
 
 type MajorityStrategy struct {
@@ -28,28 +28,31 @@ func (c *MajorityStrategy) votesNeeded() int {
 }
 
 func (c *MajorityStrategy) NewOp(term uint32) QuorumOp {
-	votes := 1
-	greaterTerm := false
-
-	op := struct{ OpHelper }{}
-	op.IsObtainedFn = func() bool {
-		return !greaterTerm && (c.votesNeeded() == 1 || c.votesNeeded() <= votes)
-	}
-	op.VoteReceivedFn = func(vTerm uint32) {
-		if vTerm > term {
-			greaterTerm = true
-		} else {
-			votes++
-		}
-	}
-
-	return op
+	// votes := 1
+	// greaterTerm := false
+	//
+	// op := struct{ OpHelper }{}
+	// op.IsObtainedFn = func() bool {
+	// 	return !greaterTerm && (c.votesNeeded() == 1 || c.votesNeeded() <= votes)
+	// }
+	// op.VoteReceivedFn = func(vTerm uint32) QuorumOp {
+	// 	if vTerm > term {
+	// 		greaterTerm = true
+	// 	} else {
+	// 		votes++
+	// 	}
+	//
+	// 	return op
+	// }
+	//
+	// return op
+	return nil
 }
 
 // allows implementing QuorumOp 'anonymously'
 type OpHelper struct {
 	IsObtainedFn   func() bool
-	VoteReceivedFn func(uint32)
+	VoteReceivedFn func(uint32) QuorumOp
 }
 
 func (o OpHelper) IsObtained() bool {

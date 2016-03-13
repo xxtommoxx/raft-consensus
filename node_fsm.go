@@ -6,6 +6,7 @@ import (
 	"github.com/Sirupsen/logrus"
 	"github.com/xxtommoxx/raft-consensus/common"
 	"github.com/xxtommoxx/raft-consensus/rpc"
+	"reflect"
 )
 
 type state int
@@ -33,9 +34,9 @@ func (s state) String() string {
 }
 
 type rpcContext struct {
-	term      uint32
-	rpc       interface{}
-	forwardCh *common.ForwardChan
+	req       rpc.Request
+	respCh    reflect.Value
+	respErrCh chan error
 }
 
 type stateHandler struct {
@@ -115,15 +116,10 @@ func (n *NodeFSM) candidateHandler(candidate *Candidate) stateHandler {
 			}
 		},
 		func(rpcCtx rpcContext) state {
-			switch rpcCtx.rpc.(type) {
+			switch rpcCtx.req.(type) {
 			case *rpc.VoteRequest:
 				n.processAsync(rpcCtx, func() (interface{}, error) {
-					resp := &rpc.VoteResponse{ // Candidate is requesting votes for the same term as this incoming VoteRequest
-						Term:        n.stateStore.CurrentTerm(),
-						VoteGranted: false,
-					}
-
-					return resp, nil
+					return false, nil
 				})
 				return candidateState
 
@@ -161,13 +157,13 @@ func (n *NodeFSM) followerHandler(follower *Follower) stateHandler {
 			}
 		},
 		func(rpcCtx rpcContext) state {
-			switch req := rpcCtx.rpc.(type) {
+			switch req := rpcCtx.req.(type) {
 			case *rpc.VoteRequest:
 				n.processAsync(rpcCtx, func() (interface{}, error) { return follower.RequestVote(req) })
 				return followerState
 
 			case *rpc.KeepAliveRequest:
-				n.processAsync(rpcCtx, func() (interface{}, error) { return follower.KeepAliveRequest(req) })
+				n.processAsync(rpcCtx, func() (interface{}, error) { return nil, follower.KeepAliveRequest(req) })
 				return followerState
 
 			default:
@@ -212,19 +208,19 @@ func (n *NodeFSM) commonEventHandler(s state, fn eventFn) eventFn {
 func (n *NodeFSM) commonRpcHandler(s state, fn rpcFn) rpcFn {
 	return func(rpcCtx rpcContext) state {
 		return n.commonTermStateHandler(s,
-			rpcCtx.term,
+			rpcCtx.req.Term(),
 			func() {
 				currentTerm := n.stateStore.CurrentTerm()
-				errorMsg := fmt.Sprintf("Old Term: %v Current Term: %v", rpcCtx.term, currentTerm)
-				rpcCtx.forwardCh.ErrorCh <- errors.New(errorMsg)
+				errorMsg := fmt.Sprintf("Old Term: %v Current Term: %v", rpcCtx.req.Term(), currentTerm)
+				rpcCtx.respErrCh <- errors.New(errorMsg)
 			},
 			func() { // replay by adding it back to the rpc channel after it has been transitioned to follower
 				go func() { n.rpcCh <- rpcCtx }()
 			},
 			func() state { return fn(rpcCtx) },
 			func() {
-				errorMsg := fmt.Sprintf("Can't handle %v while in %v state", rpcCtx.rpc, n.currentState)
-				rpcCtx.forwardCh.ErrorCh <- errors.New(errorMsg)
+				errorMsg := fmt.Sprintf("Can't handle %v while in %v state", rpcCtx.req, n.currentState)
+				rpcCtx.respErrCh <- errors.New(errorMsg)
 			})
 	}
 }
@@ -291,7 +287,7 @@ func (n *NodeFSM) asyncStart() {
 			})
 
 		case rpcCtx := <-n.rpcCh:
-			n.log.Debugf("Received rpc: %#v", rpcCtx.rpc)
+			n.log.Debugf("Received rpc request: %#v", rpcCtx.req)
 			n.process(func(h stateHandler) state {
 				return h.handleRpc(rpcCtx)
 			})
@@ -321,7 +317,7 @@ func (n *NodeFSM) syncStop() error {
 
 	_, stateHandler := n.getCurrent()
 	err := stateHandler.service.Stop()
-	n.log.Debug("Shut down state handler complete")
+	n.log.Debug("Shut down stateHandler complete")
 
 	close(n.stopCh)
 	n.dispatcher.Unsubscribe(n.eventCh)
@@ -337,42 +333,42 @@ func (n *NodeFSM) getCurrent() (state, stateHandler) {
 
 func (n *NodeFSM) processAsync(ctx rpcContext, fn func() (interface{}, error)) {
 	go func() {
-		defer ctx.forwardCh.Close()
+		defer close(ctx.respErrCh)
+		defer ctx.respCh.Close()
 
 		result, err := fn()
 
 		if err != nil {
-			ctx.forwardCh.ErrorCh <- err
+			ctx.respErrCh <- err
 		} else {
 			n.log.Debugf("Sending response: %#v", result)
-			ctx.forwardCh.SourceCh <- result
+			ctx.respCh.Send(reflect.ValueOf(result))
 		}
 	}()
 }
 
-func (n *NodeFSM) RequestVote(vote *rpc.VoteRequest) (<-chan *rpc.VoteResponse, <-chan error) {
-	respCh := make(chan *rpc.VoteResponse)
-	errorCh := n.sendRpcRequest(vote.Term, vote, respCh)
+func (n *NodeFSM) RequestVote(vote *rpc.VoteRequest) (<-chan bool, <-chan error) {
+	respCh := make(chan bool)
+	errorCh := n.sendRpcRequest(vote, respCh)
 	return respCh, errorCh
 }
 
-func (n *NodeFSM) KeepAlive(req *rpc.KeepAliveRequest) (<-chan *rpc.KeepAliveResponse, <-chan error) {
-	respCh := make(chan *rpc.KeepAliveResponse)
-	errorCh := n.sendRpcRequest(req.LeaderInfo.Term, req, respCh)
+func (n *NodeFSM) KeepAlive(req *rpc.KeepAliveRequest) (<-chan struct{}, <-chan error) {
+	respCh := make(chan struct{})
+	errorCh := n.sendRpcRequest(req, respCh)
 	return respCh, errorCh
 }
 
-func (n *NodeFSM) sendRpcRequest(term uint32, rpc interface{}, responseChan interface{}) <-chan error {
-
-	f := common.ForwardWithErrorCh(responseChan)
+func (n *NodeFSM) sendRpcRequest(req rpc.Request, responseChan interface{}) <-chan error {
+	errCh := make(chan error)
 
 	go func() {
 		n.rpcCh <- rpcContext{
-			term:      term,
-			rpc:       rpc,
-			forwardCh: common.ForwardWithErrorCh(responseChan),
+			req:       req,
+			respCh:    reflect.ValueOf(responseChan),
+			respErrCh: errCh,
 		}
 	}()
 
-	return f.ErrorCh
+	return errCh
 }

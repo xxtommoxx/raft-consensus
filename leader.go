@@ -11,7 +11,6 @@ type Leader struct {
 	*common.SyncService
 
 	keepAliveMs time.Duration
-	stopCh      chan struct{}
 
 	client     rpc.Client
 	stateStore common.StateStore
@@ -31,34 +30,29 @@ func NewLeader(keepAliveMs uint32, client rpc.Client, stateStore common.StateSto
 
 func (l *Leader) startKeepAliveTimer() {
 	log.Info("Sending keep alive to peers every ", l.keepAliveMs)
+
+	currentTerm := l.stateStore.CurrentTerm()
 	timer := time.NewTimer(l.keepAliveMs)
 
 	for {
 		select {
-		case <-l.stopCh: // currently there is only a stop timer event
+		case <-l.StopCh: // currently there is only a stop timer event
 			log.Debug("Stopping keep alive timer")
 			timer.Stop()
 			return
 		case <-timer.C:
 			if l.Status() == common.Started {
-				for x := range l.client.SendKeepAlive(l.stateStore.CurrentTerm()) {
-					var _ = x
-
-				}
-
+				l.client.SendKeepAlive(currentTerm, l.StopCh)
 				timer = time.NewTimer(l.keepAliveMs)
 			}
 		}
 	}
-
 }
 
 func (l *Leader) syncStart() error {
-	l.stopCh = make(chan struct{})
 	return nil
 }
 
 func (l *Leader) syncStop() error {
-	close(l.stopCh)
 	return nil
 }

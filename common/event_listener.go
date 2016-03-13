@@ -65,3 +65,12 @@ func (r *EventListenerDispatcher) HandleEvent(e Event) {
 		}()
 	}
 }
+
+func NewEvent(term uint32) func(EventType) Event {
+	return func(t EventType) Event {
+		return Event{
+			Term:      term,
+			EventType: t,
+		}
+	}
+}

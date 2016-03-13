@@ -17,7 +17,6 @@ type Follower struct {
 	random   *rand.Rand
 
 	resetTimerCh chan struct{}
-	stopCh       chan struct{}
 
 	stateStore common.StateStore
 	voteMutex  sync.Mutex
@@ -38,8 +37,6 @@ func NewFollower(stateStore common.StateStore, listener common.EventListener, ti
 
 func (f *Follower) syncStart() error {
 	f.resetTimerCh = make(chan struct{})
-	f.stopCh = make(chan struct{})
-
 	return nil
 }
 
@@ -48,19 +45,25 @@ func (f *Follower) startBackGroundTimer() {
 
 	for {
 		select {
-		case <-f.stopCh:
+		case <-f.StopCh:
 			timer.Stop()
 			close(f.resetTimerCh)
 			return
+
 		case <-f.resetTimerCh:
 			duration := f.leaderTimeout()
 			if !timer.Reset(duration) {
 				timer = time.NewTimer(duration)
 			}
+
 		case <-timer.C:
 			if f.Status() == common.Started {
 				log.Debug("Leader timer expired")
-				f.listener.HandleEvent(common.Event{Term: f.stateStore.CurrentTerm(), EventType: common.LeaderKeepAliveTimeout})
+				f.listener.HandleEvent(
+					common.Event{
+						Term:      f.stateStore.CurrentTerm(),
+						EventType: common.LeaderKeepAliveTimeout,
+					})
 			}
 		}
 	}
@@ -74,7 +77,6 @@ func (h *Follower) leaderTimeout() time.Duration {
 }
 
 func (f *Follower) syncStop() error {
-	close(f.stopCh)
 	return nil
 }
 
@@ -83,30 +85,28 @@ func (f *Follower) resetTimer() {
 	f.resetTimerCh <- struct{}{}
 }
 
-func (f *Follower) KeepAliveRequest(req *rpc.KeepAliveRequest) (*rpc.KeepAliveResponse, error) {
+func (f *Follower) KeepAliveRequest(req *rpc.KeepAliveRequest) error {
 	f.resetTimer()
-	return &rpc.KeepAliveResponse{Term: f.stateStore.CurrentTerm()}, nil
+	return nil
 }
 
-func (f *Follower) RequestVote(req *rpc.VoteRequest) (*rpc.VoteResponse, error) {
+func (f *Follower) RequestVote(req *rpc.VoteRequest) (bool, error) {
 	f.resetTimer()
-
-	log.Debug("Vote request received:", req)
 
 	voteGranted := false
 
-	votedFor := f.stateStore.VotedFor()
-	if votedFor == nil || votedFor.Term < req.Term || (votedFor.Term == req.Term && votedFor.NodeId == req.Id) {
-		vote := common.Vote{req.Term, req.Id}
-		f.stateStore.SaveVote(&vote)
-		log.Debug("Granted vote for:", req)
-		voteGranted = true
-	}
+	f.WithMutex(func() {
+		votedFor := f.stateStore.VotedFor()
+		reqId := req.Id()
+		reqTerm := req.Term()
 
-	resp := &rpc.VoteResponse{
-		Term:        f.stateStore.CurrentTerm(),
-		VoteGranted: voteGranted,
-	}
+		if votedFor == nil || votedFor.Term < reqTerm || (votedFor.Term == reqTerm && votedFor.NodeId == reqId) {
+			vote := common.Vote{reqTerm, reqId}
+			f.stateStore.SaveVote(&vote)
+			log.Debugf("Granted vote for id:%v term: %v", reqId, reqTerm)
+			voteGranted = true
+		}
+	})
 
-	return resp, nil
+	return voteGranted, nil
 }

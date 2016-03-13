@@ -16,7 +16,9 @@ type Candidate struct {
 	stateStore common.StateStore
 }
 
-func NewCandidate(stateStore common.StateStore, client rpc.Client, listener common.EventListener, quorumStrategy QuorumStrategy) *Candidate {
+func NewCandidate(stateStore common.StateStore, client rpc.Client,
+	listener common.EventListener, quorumStrategy QuorumStrategy) *Candidate {
+
 	c := &Candidate{
 		stateStore:     stateStore,
 		listener:       listener,
@@ -32,25 +34,23 @@ func NewCandidate(stateStore common.StateStore, client rpc.Client, listener comm
 func (h *Candidate) startVote() {
 	currentTerm := h.stateStore.CurrentTerm()
 
-	log.Println("Starting vote process for term:", currentTerm)
+	log.Printf("Starting vote process for term: %v", currentTerm)
+
+	eventFn := common.NewEvent(currentTerm)
 
 	qOp := h.quorumStrategy.NewOp(currentTerm)
 
 	if qOp.IsObtained() {
-		h.listener.HandleEvent(common.Event{Term: currentTerm, EventType: common.QuorumObtained})
+		h.listener.HandleEvent(eventFn(common.QuorumObtained))
 	} else {
-		for res := range h.client.SendRequestVote(currentTerm) {
-			if res.VoteGranted {
-				qOp.VoteReceived(res.Term)
-
-				if qOp.IsObtained() {
-					h.listener.HandleEvent(common.Event{Term: currentTerm, EventType: common.QuorumObtained})
-					return
-				}
+		for res := range h.client.SendRequestVote(currentTerm, h.StopCh) {
+			if op := qOp.VoteReceived(res.Term()); op.IsObtained() {
+				h.listener.HandleEvent(eventFn(common.QuorumObtained))
+				return
 			}
 		}
 
-		h.listener.HandleEvent(common.Event{Term: currentTerm, EventType: common.QuorumUnobtained})
+		h.listener.HandleEvent(eventFn(common.QuorumUnobtained))
 	}
 }
 

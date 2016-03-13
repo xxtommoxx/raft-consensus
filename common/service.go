@@ -25,6 +25,8 @@ type SyncService struct {
 	wg     sync.WaitGroup
 	status int32
 
+	StopCh chan struct{}
+
 	startFn           func() error
 	startBackgroundFn func()
 	stopFn            func() error
@@ -46,13 +48,18 @@ func (s *SyncService) Stop() error {
 	status := s.Status()
 
 	if status == Stopped || status == Unstarted {
-		return errors.New("Already stopped or was not started")
+		return errors.New("Already stopped or not started")
 	} else {
 		s.status = int32(Stopping)
+
+		close(s.StopCh)
+
 		stopRes := s.stopFn()
+
 		if s.startBackgroundFn != nil {
 			s.wg.Wait()
 		}
+
 		s.status = int32(Stopped)
 		return stopRes
 	}
@@ -65,6 +72,7 @@ func (s *SyncService) Start() error {
 	if s.Status() == Started {
 		return errors.New("Already started")
 	} else {
+		s.StopCh = make(chan struct{})
 
 		err := s.startFn()
 

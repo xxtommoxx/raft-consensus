@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package proto;
+
+import "message.proto";
+
+service RpcService {
+
+	rpc KeepAlive(KeepAliveRequest) returns (KeepAliveResponse);
+
+	/* rpc AppendLogEntries(AppendLogEntryRequest) returns (AppendEntryResponse); */
+	/* rpc UpdateConfiguration(AppendConfigEntryRequest) returns (AppendEntryResponse); */
+
+	rpc ElectLeader(VoteRequest) returns (VoteResponse);
+
+	/* rpc InstallSnapshot(InstallSnapshotRequest) returns (InstallSnapshotResponse); */
+}
+
