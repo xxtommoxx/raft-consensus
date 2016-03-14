@@ -12,7 +12,7 @@ import (
 
 // todo: replace with raft bootstrap class
 type fixture struct {
-	client rpc.Client
+	client *rpc.Client
 	server common.Service
 	fsm    *NodeFSM
 }
@@ -69,7 +69,7 @@ func makeNodes(numNodes int) []fixture {
 
 		fsm := NewNodeFSM(stateStore, eventDispatcher, follower, candidate, leader, cfg.Self.Id)
 
-		server := rpc.NewServer(cfg.Self.Host, fsm, stateStore)
+		server := rpc.NewServer(cfg.Self, fsm, stateStore)
 
 		fixtures[i] = fixture{
 			client: client,
@@ -136,14 +136,14 @@ func TestOneLeaderActive(t *testing.T) {
 	//
 	// }()
 
-	time.Sleep(10 * time.Second)
-	n[1].stop()
-
-	for i := 0; i < 1000; i++ {
-		n[0].client.SendKeepAlive(120)
-	}
-
-	n[0].stop()
+	time.Sleep(100 * time.Second)
+	// n[1].stop()
+	//
+	// for i := 0; i < 1000; i++ {
+	// 	n[0].client.SendKeepAlive(120)
+	// }
+	//
+	// n[0].stop()
 
 	// time.Sleep(10 * time.Second)
 	// log.Info("Starting....")

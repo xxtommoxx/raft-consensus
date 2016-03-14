@@ -12,13 +12,13 @@ type Leader struct {
 
 	keepAliveMs time.Duration
 
-	client        rpc.Client
+	client        *rpc.Client
 	clientSession rpc.ClientSession
 
 	stateStore common.StateStore
 }
 
-func NewLeader(keepAliveMs uint32, client rpc.Client, stateStore common.StateStore) *Leader {
+func NewLeader(keepAliveMs uint32, client *rpc.Client, stateStore common.StateStore) *Leader {
 	l := &Leader{
 		keepAliveMs: time.Duration(keepAliveMs) * time.Millisecond,
 		client:      client,

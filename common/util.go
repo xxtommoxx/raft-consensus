@@ -4,7 +4,7 @@ import (
 	log "github.com/Sirupsen/logrus"
 )
 
-func noopRecoverLog() {
+func NoopRecoverLog() {
 	if r := recover(); r != nil {
 		log.Printf("Recovered: %v", r)
 	}

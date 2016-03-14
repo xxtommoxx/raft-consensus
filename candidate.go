@@ -12,13 +12,13 @@ type Candidate struct {
 	quorumStrategy QuorumStrategy
 	listener       common.EventListener
 
-	client        rpc.Client
+	client        *rpc.Client
 	clientSession rpc.ClientSession
 
 	stateStore common.StateStore
 }
 
-func NewCandidate(stateStore common.StateStore, client rpc.Client,
+func NewCandidate(stateStore common.StateStore, client *rpc.Client,
 	listener common.EventListener, quorumStrategy QuorumStrategy) *Candidate {
 
 	c := &Candidate{

@@ -226,6 +226,7 @@ func (c *clientSession) fanoutRequest(fanoutFn func(int) *fanout, cancelCh chan 
 
 	for _, r := range rpcClients {
 		go func(p *peerClient) {
+			defer common.NoopRecoverLog()
 			defer wg.Done()
 
 			p.requestCh <- func() {
