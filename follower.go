@@ -58,7 +58,6 @@ func (f *Follower) startBackGroundTimer() {
 
 		case <-timer.C:
 			if f.Status() == common.Started {
-				log.Debug("Leader timer expired")
 				f.listener.HandleEvent(
 					common.Event{
 						Term:      f.stateStore.CurrentTerm(),

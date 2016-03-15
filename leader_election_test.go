@@ -136,7 +136,7 @@ func TestOneLeaderActive(t *testing.T) {
 	//
 	// }()
 
-	time.Sleep(100 * time.Second)
+	time.Sleep(100000 * time.Second)
 	// n[1].stop()
 	//
 	// for i := 0; i < 1000; i++ {

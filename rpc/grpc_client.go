@@ -3,6 +3,7 @@ package rpc
 import (
 	"errors"
 	"fmt"
+	log "github.com/Sirupsen/logrus"
 	"github.com/xxtommoxx/raft-consensus/common"
 	"github.com/xxtommoxx/raft-consensus/rpc/proto"
 	"golang.org/x/net/context"
@@ -21,16 +22,21 @@ type grpcClient struct {
 }
 
 func newGrpcClient(id string, peerConfig common.NodeConfig) *grpcClient {
-	return &grpcClient{
+	c := &grpcClient{
 		id:   id,
 		peer: peerConfig,
 	}
+
+	c.SyncService = common.NewSyncService(c.syncStart, nil, c.syncStop)
+
+	return c
 }
 
 func (p *grpcClient) syncStart() error {
 	conn, err := grpc.Dial(p.peer.Host, grpc.WithInsecure())
 
 	if err != nil {
+		log.Error(err)
 		return err
 	} else {
 		p.conn = conn
@@ -89,7 +95,6 @@ func (p *grpcClient) requestVote(term uint32) (*VoteResponse, error) {
 	}
 
 	resp, err := p.underlying.ElectLeader(p.context(), req)
-
 	if err != nil {
 		return nil, err
 	} else {

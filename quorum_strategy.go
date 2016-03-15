@@ -33,7 +33,7 @@ func (c *MajorityStrategy) NewOp(term uint32) QuorumOp {
 	// todo make easier to understand
 	qFn := func(votes int, greaterTerm bool, fn recFn) QuorumOp {
 		op := struct{ OpHelper }{}
-		op.IsObtainedFn = func() bool { return !greaterTerm && (c.votesNeeded() == 1 || c.votesNeeded() <= votes) }
+		op.IsObtainedFn = func() bool { return !greaterTerm && c.votesNeeded() <= votes }
 		op.VoteReceivedFn = func(vTerm uint32) QuorumOp {
 			if greaterTerm || op.IsObtainedFn() {
 				return op
@@ -44,7 +44,7 @@ func (c *MajorityStrategy) NewOp(term uint32) QuorumOp {
 		return op
 	}
 
-	return qFn(0, false, qFn)
+	return qFn(1, false, qFn)
 }
 
 // allows implementing QuorumOp 'anonymously'

@@ -218,6 +218,7 @@ func (n *NodeFSM) commonRpcHandler(s state, fn rpcFn) rpcFn {
 				go func() { n.rpcCh <- rpcCtx }()
 			},
 			func() state { return fn(rpcCtx) },
+
 			func() {
 				errorMsg := fmt.Sprintf("Can't handle %v while in %v state", rpcCtx.req, n.currentState)
 				rpcCtx.respErrCh <- errors.New(errorMsg)
@@ -239,10 +240,8 @@ func (n *NodeFSM) commonTermStateHandler(s state, term uint32,
 	case term > currentTerm:
 		n.stateStore.SaveCurrentTerm(term)
 
-		if s != followerState {
-			gt()
-			nextState = followerState
-		}
+		gt()
+		nextState = followerState
 
 	default:
 		eqNextState := eq()
@@ -287,9 +286,10 @@ func (n *NodeFSM) asyncStart() {
 			})
 
 		case rpcCtx := <-n.rpcCh:
-			n.log.Debugf("Received rpc request: %#v", rpcCtx.req)
+			n.log.Debugf("Received rpc request: %v", rpcCtx.req)
 			n.process(func(h stateHandler) state {
-				return h.handleRpc(rpcCtx)
+				k := h.handleRpc(rpcCtx)
+				return k
 			})
 		}
 	}
@@ -341,8 +341,10 @@ func (n *NodeFSM) processAsync(ctx rpcContext, fn func() (interface{}, error)) {
 		if err != nil {
 			ctx.respErrCh <- err
 		} else {
-			n.log.Debugf("Sending response: %#v", result)
-			ctx.respCh.Send(reflect.ValueOf(result))
+			if result != nil {
+				n.log.Debugf("Sending response: %#v", result)
+				ctx.respCh.Send(reflect.ValueOf(result))
+			}
 		}
 	}()
 }

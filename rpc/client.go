@@ -40,7 +40,6 @@ func NewClient(listener common.EventListener, config common.NodeConfig,
 }
 
 func (c *Client) syncStop() error {
-	c.closeSessions()
 	return c.stopGrpcClients()
 }
 
@@ -65,12 +64,6 @@ func (c *Client) syncStart() error {
 	log.Info("Start client complete")
 
 	return nil
-}
-
-func (c *Client) closeSessions() {
-	for _, sess := range c.sessions {
-		sess.Terminate()
-	}
 }
 
 func (c *Client) stopGrpcClients() error {
@@ -103,19 +96,22 @@ type clientSession struct {
 	terminateCh chan struct{}
 	peerClients map[string]*peerClient
 	listener    common.EventListener
+	requestCh   chan func()
 }
 
 func newClientSession(grpcClients map[string]*grpcClient, listener common.EventListener) *clientSession {
 	peerClients := make(map[string]*peerClient)
+	requestCh := make(chan func())
 
 	for id, gClient := range grpcClients {
-		peerClients[id] = newPeerClient(gClient)
+		peerClients[id] = newPeerClient(gClient, requestCh)
 	}
 
 	c := &clientSession{
 		terminateCh: make(chan struct{}),
 		listener:    listener,
 		peerClients: peerClients,
+		requestCh:   requestCh,
 	}
 
 	go c.processPeerRequests()
@@ -124,15 +120,17 @@ func newClientSession(grpcClients map[string]*grpcClient, listener common.EventL
 	return c
 }
 
-func newPeerClient(gClient *grpcClient) *peerClient {
+func newPeerClient(gClient *grpcClient, requestCh chan func()) *peerClient {
 	return &peerClient{
 		grpcClient: gClient,
-		requestCh:  make(chan func()),
+		requestCh:  requestCh,
 	}
 }
 
 func (c *clientSession) watchForTerminate() {
 	<-c.terminateCh
+
+	log.Debug("Terminating session")
 
 	for _, r := range c.peerClients {
 		close(r.requestCh)
@@ -140,22 +138,17 @@ func (c *clientSession) watchForTerminate() {
 }
 
 func (c *clientSession) processPeerRequests() {
-	numClient := len(c.peerClients)
-
-	var wg sync.WaitGroup
-	wg.Add(numClient)
-
+	for reqFn := range c.requestCh {
+		reqFn()
+	}
 	for _, r := range c.peerClients {
 		go func(p *peerClient) {
-			for reqFn := range p.requestCh {
+			for reqFn := range c.requestCh {
 				reqFn()
 			}
-
-			wg.Done()
 		}(r)
 	}
 
-	wg.Wait()
 }
 
 func (c *clientSession) Terminate() {
@@ -226,12 +219,12 @@ func (c *clientSession) fanoutRequest(fanoutFn func(int) *fanout, cancelCh chan 
 
 	for _, r := range rpcClients {
 		go func(p *peerClient) {
-			defer common.NoopRecoverLog()
-			defer wg.Done()
+			defer common.NoopRecoverLog() // requestCh might be closed because of session being terminated
 
 			p.requestCh <- func() {
+				defer wg.Done()
+				defer common.NoopRecoverLog() // responseCh might be closed because of cancelled
 				resp, err := f.reqFn(p)
-
 				if err != nil {
 					log.Warn(err)
 				} else {
@@ -240,11 +233,12 @@ func (c *clientSession) fanoutRequest(fanoutFn func(int) *fanout, cancelCh chan 
 							Term:      resp.Term(),
 							EventType: common.ResponseReceived,
 						})
+
 					f.respCh.Send(reflect.ValueOf(resp))
 				}
 			}
 		}(r)
 	}
 
-	return f.respCh
+	return f.respCh.Interface()
 }
