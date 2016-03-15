@@ -45,10 +45,12 @@ func (h *Candidate) startVote() {
 	if qOp.IsObtained() {
 		h.listener.HandleEvent(eventFn(common.QuorumObtained))
 	} else {
-		for res := range h.clientSession.SendRequestVote(currentTerm, make(chan struct{})) {
-			if qOp = qOp.VoteReceived(res.Term()); qOp.IsObtained() {
-				h.listener.HandleEvent(eventFn(common.QuorumObtained))
-				return
+		for res := range h.clientSession.SendRequestVote(currentTerm, h.StopCh) {
+			if res.VoteGranted {
+				if qOp = qOp.VoteReceived(res.Term()); qOp.IsObtained() {
+					h.listener.HandleEvent(eventFn(common.QuorumObtained))
+					return
+				}
 			}
 		}
 
