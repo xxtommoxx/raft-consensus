@@ -96,22 +96,20 @@ type clientSession struct {
 	terminateCh chan struct{}
 	peerClients map[string]*peerClient
 	listener    common.EventListener
-	requestCh   chan func()
+	id          string
 }
 
 func newClientSession(grpcClients map[string]*grpcClient, listener common.EventListener) *clientSession {
 	peerClients := make(map[string]*peerClient)
-	requestCh := make(chan func())
 
 	for id, gClient := range grpcClients {
-		peerClients[id] = newPeerClient(gClient, requestCh)
+		peerClients[id] = newPeerClient(gClient)
 	}
 
 	c := &clientSession{
 		terminateCh: make(chan struct{}),
 		listener:    listener,
 		peerClients: peerClients,
-		requestCh:   requestCh,
 	}
 
 	go c.processPeerRequests()
@@ -120,10 +118,10 @@ func newClientSession(grpcClients map[string]*grpcClient, listener common.EventL
 	return c
 }
 
-func newPeerClient(gClient *grpcClient, requestCh chan func()) *peerClient {
+func newPeerClient(gClient *grpcClient) *peerClient {
 	return &peerClient{
 		grpcClient: gClient,
-		requestCh:  requestCh,
+		requestCh:  make(chan func()),
 	}
 }
 
@@ -138,17 +136,14 @@ func (c *clientSession) watchForTerminate() {
 }
 
 func (c *clientSession) processPeerRequests() {
-	for reqFn := range c.requestCh {
-		reqFn()
-	}
+
 	for _, r := range c.peerClients {
 		go func(p *peerClient) {
-			for reqFn := range c.requestCh {
+			for reqFn := range p.requestCh {
 				reqFn()
 			}
 		}(r)
 	}
-
 }
 
 func (c *clientSession) Terminate() {

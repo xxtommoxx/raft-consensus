@@ -148,6 +148,7 @@ func (n *NodeFSM) followerHandler(follower *Follower) stateHandler {
 		func(e common.Event) state {
 			switch e.EventType {
 			case common.LeaderKeepAliveTimeout:
+				n.log.Info("Leader timer expired beginning vote...")
 				newTerm := n.stateStore.CurrentTerm() + 1
 				n.stateStore.SaveCurrentTerm(newTerm)
 				return candidateState
@@ -339,10 +340,11 @@ func (n *NodeFSM) processAsync(ctx rpcContext, fn func() (interface{}, error)) {
 		result, err := fn()
 
 		if err != nil {
+			n.log.Debugf("Sending error response: %v", err)
 			ctx.respErrCh <- err
 		} else {
 			if result != nil {
-				n.log.Debugf("Sending response: %#v", result)
+				n.log.Debugf("Sending response: %v", result)
 				ctx.respCh.Send(reflect.ValueOf(result))
 			}
 		}

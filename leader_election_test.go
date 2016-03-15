@@ -119,7 +119,7 @@ func makeConfigs(nodeConfigs []common.NodeConfig) []common.Config {
 func TestOneLeaderActive(t *testing.T) {
 	log.SetLevel(log.InfoLevel)
 
-	n := makeNodes(2)
+	n := makeNodes(3)
 
 	go func() {
 		n[0].start()
@@ -131,23 +131,15 @@ func TestOneLeaderActive(t *testing.T) {
 
 	}()
 
-	// go func() {
-	// 	n[2].start()
-	//
-	// }()
+	go func() {
+		n[2].start()
+	}()
 
-	time.Sleep(100000 * time.Second)
-	// n[1].stop()
-	//
-	// for i := 0; i < 1000; i++ {
-	// 	n[0].client.SendKeepAlive(120)
-	// }
-	//
-	// n[0].stop()
-
-	// time.Sleep(10 * time.Second)
-	// log.Info("Starting....")
-	// n[0].start()
-	// time.Sleep(1000 * time.Second)
+	time.Sleep(5 * time.Second)
+	n[1].stop()
+	time.Sleep(10 * time.Second)
+	log.Info("Starting....")
+	n[1].start()
+	time.Sleep(1000 * time.Second)
 
 }

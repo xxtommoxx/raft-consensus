@@ -57,7 +57,7 @@ func newGrpcServer(nodeConfig common.NodeConfig, requestHandler RequestHandler,
 }
 
 func (s *grpcServer) syncStart() error {
-	log.Info("Starting grpcServer using", s.nodeConfig.Host)
+	log.Infof("Starting grpcServer using %v", s.nodeConfig.Host)
 
 	lis, err := net.Listen("tcp", s.nodeConfig.Host)
 
