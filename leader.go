@@ -58,6 +58,5 @@ func (l *Leader) syncStart() error {
 
 func (l *Leader) syncStop() error {
 	l.clientSession.Terminate()
-	l.clientSession = nil
 	return nil
 }

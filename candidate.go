@@ -65,6 +65,5 @@ func (h *Candidate) syncStart() error {
 
 func (h *Candidate) syncStop() error {
 	h.clientSession.Terminate()
-	h.clientSession = nil
 	return nil
 }

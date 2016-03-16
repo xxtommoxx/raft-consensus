@@ -39,13 +39,14 @@ func (f fixture) stop() {
 	log.Info("Stopped fsm")
 }
 
-func removeAt(index int, slice interface{}) interface{} {
-	s := reflect.ValueOf(slice)
-
+func removeAt(index int, s interface{}) interface{} {
+	t, v := reflect.TypeOf(s), reflect.ValueOf(s)
+	cpy := reflect.MakeSlice(t, v.Len(), v.Len())
+	reflect.Copy(cpy, v)
 	if index == 0 {
-		return s.Slice(1, s.Len()).Interface()
+		return cpy.Slice(1, cpy.Len()).Interface()
 	} else {
-		return reflect.AppendSlice(s.Slice(0, index), s.Slice(index+1, s.Len())).Interface()
+		return reflect.AppendSlice(cpy.Slice(0, index), cpy.Slice(index+1, cpy.Len())).Interface()
 	}
 }
 
