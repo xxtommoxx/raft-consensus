@@ -4,6 +4,7 @@ import (
 	"errors"
 	log "github.com/Sirupsen/logrus"
 	"github.com/xxtommoxx/raft-consensus/common"
+	"google.golang.org/grpc"
 	"reflect"
 	"sync"
 )
@@ -20,27 +21,50 @@ type Client struct {
 
 	listener common.EventListener
 
-	peers       []common.NodeConfig
-	grpcClients map[string]*grpcClient
+	peers          []common.NodeConfig
+	grpcConnInfoCh chan grpcConnInfo
+	grpcClients    map[string]*grpcClient
 
-	sessions []ClientSession
+	sessions map[*clientSession]*struct{}
 }
 
 func NewClient(listener common.EventListener, config common.NodeConfig,
 	peers ...common.NodeConfig) *Client {
 
 	client := &Client{
-		peers:    peers,
-		listener: listener,
-		config:   config,
+		peers:          peers,
+		listener:       listener,
+		config:         config,
+		grpcConnInfoCh: make(chan grpcConnInfo),
+		sessions:       make(map[*clientSession]*struct{}),
 	}
 
-	client.SyncService = common.NewSyncService(client.syncStart, nil, client.syncStop)
+	client.SyncService = common.NewSyncService(client.syncStart, client.manageSessions, client.syncStop)
 	return client
 }
 
 func (c *Client) syncStop() error {
 	return c.stopGrpcClients()
+}
+
+func (c *Client) manageSessions() {
+	for {
+		select {
+		case <-c.StopCh:
+			return
+		case connInfo := <-c.grpcConnInfoCh:
+			c.WithMutex(func() {
+				for s, _ := range c.sessions {
+					switch connInfo.state {
+					case grpc.Ready:
+						s.addGrpcClient(connInfo.id, c.grpcClients[connInfo.id])
+					case grpc.TransientFailure:
+						s.removeGrpcClient(connInfo.id)
+					}
+				}
+			})
+		}
+	}
 }
 
 func (c *Client) syncStart() error {
@@ -49,7 +73,7 @@ func (c *Client) syncStart() error {
 	grpcClients := make(map[string]*grpcClient)
 
 	for _, peer := range c.peers {
-		grpcClient := newGrpcClient(c.config.Id, peer)
+		grpcClient := newGrpcClient(c.config.Id, peer, c.grpcConnInfoCh)
 
 		if err := grpcClient.Start(); err != nil {
 			log.Errorf("Failed to start for client: %v - error: %v", peer, err)
@@ -84,7 +108,20 @@ func (c *Client) stopGrpcClients() error {
 }
 
 func (c *Client) NewSession() ClientSession {
-	return newClientSession(c.grpcClients, c.listener)
+	var s *clientSession
+
+	c.WithMutex(func() {
+		s = newClientSession(c.grpcClients, c.listener, c.config.Id, c)
+		c.sessions[s] = nil
+	})
+
+	return s
+}
+
+func (c *Client) removeSession(s *clientSession) {
+	c.WithMutex(func() {
+		delete(c.sessions, s)
+	})
 }
 
 type peerClient struct {
@@ -93,13 +130,17 @@ type peerClient struct {
 }
 
 type clientSession struct {
+	client *Client // TODO client dependency should be removed; only used to remove session
+
 	terminateCh chan struct{}
 	peerClients map[string]*peerClient
 	listener    common.EventListener
-	id          string
+
+	mutex sync.RWMutex
 }
 
-func newClientSession(grpcClients map[string]*grpcClient, listener common.EventListener) *clientSession {
+func newClientSession(grpcClients map[string]*grpcClient,
+	listener common.EventListener, id string, client *Client) *clientSession {
 	peerClients := make(map[string]*peerClient)
 
 	for id, gClient := range grpcClients {
@@ -109,40 +150,66 @@ func newClientSession(grpcClients map[string]*grpcClient, listener common.EventL
 	c := &clientSession{
 		terminateCh: make(chan struct{}),
 		listener:    listener,
+		client:      client,
 		peerClients: peerClients,
 	}
 
-	go c.processPeerRequests()
 	go c.watchForTerminate()
 
 	return c
 }
 
-func newPeerClient(gClient *grpcClient) *peerClient {
-	return &peerClient{
-		grpcClient: gClient,
-		requestCh:  make(chan func()),
+func (c *clientSession) addGrpcClient(id string, gClient *grpcClient) {
+	defer c.mutex.Unlock()
+	c.mutex.Lock()
+
+	if peerClient := c.peerClients[id]; peerClient != nil {
+		log.Error("Adding a peer client with the same id!")
+	} else {
+		c.peerClients[id] = newPeerClient(gClient)
 	}
 }
 
+func (c *clientSession) removeGrpcClient(id string) {
+	defer common.NoopRecoverLog()
+	defer c.mutex.Unlock()
+	c.mutex.Lock()
+
+	if peerClient := c.peerClients[id]; peerClient != nil {
+		close(peerClient.requestCh)
+	}
+}
+
+func newPeerClient(gClient *grpcClient) *peerClient {
+	p := &peerClient{
+		grpcClient: gClient,
+		requestCh:  make(chan func()),
+	}
+
+	go processPeerRequests(p)
+	return p
+}
+
 func (c *clientSession) watchForTerminate() {
+	defer c.mutex.RUnlock()
+
 	<-c.terminateCh
+
+	c.mutex.RLock()
 
 	log.Debug("Terminating session")
 
 	for _, r := range c.peerClients {
 		close(r.requestCh)
 	}
+
+	c.client.removeSession(c)
+	c = nil
 }
 
-func (c *clientSession) processPeerRequests() {
-
-	for _, r := range c.peerClients {
-		go func(p *peerClient) {
-			for reqFn := range p.requestCh {
-				reqFn()
-			}
-		}(r)
+func processPeerRequests(p *peerClient) {
+	for reqFn := range p.requestCh {
+		reqFn()
 	}
 }
 
@@ -188,6 +255,9 @@ func newFanout(reqFn func(*peerClient) (Response, error), respCh interface{}) *f
 }
 
 func (c *clientSession) fanoutRequest(fanoutFn func(int) *fanout, cancelCh chan struct{}) interface{} {
+	defer c.mutex.RUnlock()
+	c.mutex.RLock()
+
 	rpcClients := c.peerClients
 	numClients := len(rpcClients)
 
@@ -234,6 +304,5 @@ func (c *clientSession) fanoutRequest(fanoutFn func(int) *fanout, cancelCh chan 
 			}
 		}(r)
 	}
-
 	return f.respCh.Interface()
 }

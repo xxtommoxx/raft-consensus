@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+type grpcConnInfo struct {
+	id    string
+	state grpc.ConnectivityState
+}
+
 type grpcClient struct {
 	id string
 
@@ -19,12 +24,15 @@ type grpcClient struct {
 	peer       common.NodeConfig
 	conn       *grpc.ClientConn
 	underlying proto.RpcServiceClient
+
+	connInfoCh chan grpcConnInfo
 }
 
-func newGrpcClient(id string, peerConfig common.NodeConfig) *grpcClient {
+func newGrpcClient(id string, peerConfig common.NodeConfig, connInfoCh chan grpcConnInfo) *grpcClient {
 	c := &grpcClient{
-		id:   id,
-		peer: peerConfig,
+		id:         id,
+		peer:       peerConfig,
+		connInfoCh: connInfoCh,
 	}
 
 	c.SyncService = common.NewSyncService(c.syncStart, nil, c.syncStop)
@@ -48,6 +56,7 @@ func (p *grpcClient) syncStart() error {
 				return sErr
 			} else if s == grpc.Ready {
 				p.underlying = proto.NewRpcServiceClient(conn)
+				go p.monitorConnFailure()
 				return nil
 			} else {
 				time.Sleep(500 * time.Millisecond)
@@ -55,6 +64,38 @@ func (p *grpcClient) syncStart() error {
 		}
 
 		return errors.New(fmt.Sprintf("Failed to establish initial connection for host %v", p.peer.Host))
+	}
+}
+
+func (p *grpcClient) waitForConn(anyOtherState grpc.ConnectivityState, nextState grpc.ConnectivityState, fn func()) {
+	nextState, err := p.conn.WaitForStateChange(context.TODO(), anyOtherState) // TODO integrate with stopCh
+	if err != nil {
+		log.Error(err) // todo might want to handle this in an elegant way
+	} else if nextState == nextState {
+		fn()
+	}
+}
+
+func (p *grpcClient) monitorConnFailure() {
+	connFailure := false
+
+	p.waitForConn(grpc.Ready, grpc.TransientFailure, func() {
+		p.connInfoCh <- grpcConnInfo{
+			state: grpc.TransientFailure,
+			id:    p.id,
+		}
+		connFailure = true
+	})
+
+	if connFailure {
+		p.waitForConn(grpc.TransientFailure, grpc.Ready, func() {
+			log.Error(p.conn.State())
+			p.connInfoCh <- grpcConnInfo{
+				state: grpc.Ready,
+				id:    p.id,
+			}
+			go p.monitorConnFailure()
+		})
 	}
 }
 
