@@ -104,7 +104,7 @@ func makeConfigs(nodeConfigs []common.NodeConfig) []common.Config {
 		configs[i] = common.Config{
 			Self: nodeCfg,
 			Leader: common.LeaderConfig{
-				KeepAliveMs: 10,
+				KeepAliveMs: 100,
 				Timeout: common.LeaderTimeout{
 					MaxMillis: 1000,
 					MinMillis: 500,

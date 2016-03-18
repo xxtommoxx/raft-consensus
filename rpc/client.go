@@ -4,7 +4,6 @@ import (
 	"errors"
 	log "github.com/Sirupsen/logrus"
 	"github.com/xxtommoxx/raft-consensus/common"
-	"google.golang.org/grpc"
 	"reflect"
 	"sync"
 )
@@ -56,9 +55,11 @@ func (c *Client) manageSessions() {
 			c.WithMutex(func() {
 				for s, _ := range c.sessions {
 					switch connInfo.state {
-					case grpc.Ready:
+					case healthyConn:
+						log.Infof("Adding back now healthy conn id: %v to session", connInfo.id)
 						s.addGrpcClient(connInfo.id, c.grpcClients[connInfo.id])
-					case grpc.TransientFailure:
+					case unhealthyConn:
+						log.Infof("Removing unhealthy conn id: %v to session", connInfo.id)
 						s.removeGrpcClient(connInfo.id)
 					}
 				}
@@ -163,20 +164,19 @@ func (c *clientSession) addGrpcClient(id string, gClient *grpcClient) {
 	defer c.mutex.Unlock()
 	c.mutex.Lock()
 
-	if peerClient := c.peerClients[id]; peerClient != nil {
-		log.Error("Adding a peer client with the same id!")
-	} else {
+	if peerClient := c.peerClients[id]; peerClient == nil {
 		c.peerClients[id] = newPeerClient(gClient)
 	}
 }
 
 func (c *clientSession) removeGrpcClient(id string) {
-	defer common.NoopRecoverLog()
 	defer c.mutex.Unlock()
+	defer common.NoopRecoverLog() // session is terminating and already closed requestCh and this was invoked concurrently
 	c.mutex.Lock()
 
 	if peerClient := c.peerClients[id]; peerClient != nil {
-		close(peerClient.requestCh)
+		// close(peerClient.requestCh)
+		delete(c.peerClients, id)
 	}
 }
 
@@ -192,6 +192,7 @@ func newPeerClient(gClient *grpcClient) *peerClient {
 
 func (c *clientSession) watchForTerminate() {
 	defer c.mutex.RUnlock()
+	defer common.NoopRecoverLog() // requestCh might be closed by an unhealthy connection in removeGrpcClient
 
 	<-c.terminateCh
 
@@ -203,8 +204,7 @@ func (c *clientSession) watchForTerminate() {
 		close(r.requestCh)
 	}
 
-	c.client.removeSession(c)
-	c = nil
+	// c.client.removeSession(c)
 }
 
 func processPeerRequests(p *peerClient) {
@@ -284,11 +284,15 @@ func (c *clientSession) fanoutRequest(fanoutFn func(int) *fanout, cancelCh chan 
 
 	for _, r := range rpcClients {
 		go func(p *peerClient) {
-			defer common.NoopRecoverLog() // requestCh might be closed because of session being terminated
+
+			// requestCh might be closed because of session being terminated
+			// let go of the wait
+			defer common.RecoverAndDo(func() { wg.Done() })
 
 			p.requestCh <- func() {
 				defer wg.Done()
-				defer common.NoopRecoverLog() // responseCh might be closed because of cancelled
+				defer common.NoopRecoverLog() // respCh might be closed because of session being terminated
+
 				resp, err := f.reqFn(p)
 				if err != nil {
 					log.Warn(err)

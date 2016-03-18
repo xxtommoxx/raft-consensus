@@ -11,9 +11,14 @@ import (
 	"time"
 )
 
+const (
+	healthyConn = iota
+	unhealthyConn
+)
+
 type grpcConnInfo struct {
 	id    string
-	state grpc.ConnectivityState
+	state int
 }
 
 type grpcClient struct {
@@ -61,42 +66,49 @@ func (p *grpcClient) syncStart() error {
 			} else {
 				time.Sleep(500 * time.Millisecond)
 			}
+
 		}
 
 		return errors.New(fmt.Sprintf("Failed to establish initial connection for host %v", p.peer.Host))
 	}
 }
 
-func (p *grpcClient) waitForConn(anyOtherState grpc.ConnectivityState, nextState grpc.ConnectivityState, fn func()) {
-	nextState, err := p.conn.WaitForStateChange(context.TODO(), anyOtherState) // TODO integrate with stopCh
+func (p *grpcClient) waitForConn(anyOtherState grpc.ConnectivityState, fn func(grpc.ConnectivityState)) {
+	nextState, err := p.conn.WaitForStateChange(context.TODO(), anyOtherState)
 	if err != nil {
 		log.Error(err) // todo might want to handle this in an elegant way
-	} else if nextState == nextState {
-		fn()
+	} else {
+		fn(nextState)
 	}
 }
 
-func (p *grpcClient) monitorConnFailure() {
-	connFailure := false
-
-	p.waitForConn(grpc.Ready, grpc.TransientFailure, func() {
-		p.connInfoCh <- grpcConnInfo{
-			state: grpc.TransientFailure,
-			id:    p.id,
-		}
-		connFailure = true
-	})
-
-	if connFailure {
-		p.waitForConn(grpc.TransientFailure, grpc.Ready, func() {
-			log.Error(p.conn.State())
+func (p *grpcClient) monitorConnReady(currState grpc.ConnectivityState) {
+	p.waitForConn(currState, func(state grpc.ConnectivityState) {
+		if state == grpc.Ready {
 			p.connInfoCh <- grpcConnInfo{
-				state: grpc.Ready,
-				id:    p.id,
+				state: healthyConn,
+				id:    p.peer.Id,
 			}
-			go p.monitorConnFailure()
-		})
-	}
+
+			p.monitorConnFailure()
+
+		} else if state == grpc.TransientFailure || state == grpc.Connecting {
+			go p.monitorConnReady(state)
+		}
+	})
+}
+
+func (p *grpcClient) monitorConnFailure() {
+	p.waitForConn(grpc.Ready, func(state grpc.ConnectivityState) {
+		if state == grpc.TransientFailure || state == grpc.Connecting {
+			p.connInfoCh <- grpcConnInfo{
+				state: unhealthyConn,
+				id:    p.peer.Id,
+			}
+
+			p.monitorConnReady(state)
+		}
+	})
 }
 
 func (p *grpcClient) syncStop() error {
