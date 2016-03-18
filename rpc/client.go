@@ -20,9 +20,10 @@ type Client struct {
 
 	listener common.EventListener
 
-	peers          []common.NodeConfig
-	grpcConnInfoCh chan grpcConnInfo
-	grpcClients    map[string]*grpcClient
+	peers                []common.NodeConfig
+	grpcConnInfoCh       chan grpcConnInfo
+	grpcClients          map[string]*grpcClient
+	unhealthyGrpcClients map[string]*grpcClient
 
 	sessions map[*clientSession]*struct{}
 }
@@ -31,11 +32,12 @@ func NewClient(listener common.EventListener, config common.NodeConfig,
 	peers ...common.NodeConfig) *Client {
 
 	client := &Client{
-		peers:          peers,
-		listener:       listener,
-		config:         config,
-		grpcConnInfoCh: make(chan grpcConnInfo),
-		sessions:       make(map[*clientSession]*struct{}),
+		peers:                peers,
+		listener:             listener,
+		config:               config,
+		grpcConnInfoCh:       make(chan grpcConnInfo),
+		sessions:             make(map[*clientSession]*struct{}),
+		unhealthyGrpcClients: make(map[string]*grpcClient),
 	}
 
 	client.SyncService = common.NewSyncService(client.syncStart, client.manageSessions, client.syncStop)
@@ -53,16 +55,28 @@ func (c *Client) manageSessions() {
 			return
 		case connInfo := <-c.grpcConnInfoCh:
 			c.WithMutex(func() {
-				for s, _ := range c.sessions {
-					switch connInfo.state {
-					case healthyConn:
-						log.Infof("Adding back now healthy conn id: %v to session", connInfo.id)
+				switch connInfo.state {
+				case healthyConn:
+					log.Infof("Adding back now healthy conn id: %v", connInfo.id)
+
+					c.grpcClients[connInfo.id] = c.unhealthyGrpcClients[connInfo.id]
+					delete(c.unhealthyGrpcClients, connInfo.id)
+
+					for s, _ := range c.sessions {
 						s.addGrpcClient(connInfo.id, c.grpcClients[connInfo.id])
-					case unhealthyConn:
-						log.Infof("Removing unhealthy conn id: %v to session", connInfo.id)
+					}
+
+				case unhealthyConn:
+					log.Infof("Removing unhealthy conn id: %v", connInfo.id)
+
+					c.unhealthyGrpcClients[connInfo.id] = c.grpcClients[connInfo.id]
+					delete(c.grpcClients, connInfo.id)
+
+					for s, _ := range c.sessions {
 						s.removeGrpcClient(connInfo.id)
 					}
 				}
+
 			})
 		}
 	}
@@ -204,7 +218,7 @@ func (c *clientSession) watchForTerminate() {
 		close(r.requestCh)
 	}
 
-	// c.client.removeSession(c)
+	c.client.removeSession(c)
 }
 
 func processPeerRequests(p *peerClient) {
