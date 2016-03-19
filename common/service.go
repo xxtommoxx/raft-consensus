@@ -9,6 +9,7 @@ import (
 type Service interface {
 	Stop() error
 	Start() error
+	Status() ServiceState
 }
 
 type ServiceState int32

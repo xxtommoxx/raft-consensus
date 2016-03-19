@@ -6,53 +6,153 @@ import (
 	"github.com/xxtommoxx/raft-consensus/common"
 	"github.com/xxtommoxx/raft-consensus/rpc"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
 
-// todo: replace with raft bootstrap class
+const (
+	UseLeaderKeepAliveMs  = 10
+	UseMinLeaderTimeoutMs = 30
+	UseMaxLeaderTimeoutMs = 40
+)
+
+func TestOneLeaderActive(t *testing.T) {
+	fixture := makeNodes(5)
+
+	defer fixture.stopAll()
+	fixture.startAll()
+
+	if leaderObtained, leaderIndex := fixture.waitForLeader(); leaderObtained {
+		runForTimes(50, func() {
+			for i, n := range fixture.nodes {
+				if i == leaderIndex && n.fsm.currentState != leaderState {
+					t.Fatal("Assumed leader is no longer leader")
+				} else if i != leaderIndex && n.fsm.currentState == leaderState {
+					t.Fatal("Multiple leaders")
+				}
+			}
+		})
+	} else {
+		t.Fail()
+	}
+}
+
+func runForTimes(times int, fn func()) {
+	for i := 0; i < times; i++ {
+		fn()
+		time.Sleep(time.Millisecond * 10)
+	}
+}
+
+// func assertStable(t *testing.T, failMsg string, delay time.Duration, tries int, doFn func() bool) {
+// 	if !waitForStable(delay, tries, doFn) {
+// 		t.Fatal(failMsg)
+// 	}
+// }
+
 type fixture struct {
+	nodes []node
+}
+
+func (f fixture) startAll() {
+	var wg sync.WaitGroup
+	wg.Add(len(f.nodes))
+
+	for _, n := range f.nodes {
+		go func(n_ node) {
+			n_.start()
+			wg.Done()
+		}(n)
+	}
+
+	wg.Wait()
+}
+
+func (f fixture) stopAll() {
+	var wg sync.WaitGroup
+
+	wg.Add(len(f.nodes))
+
+	for _, n := range f.nodes {
+		go func(n_ node) {
+			n_.stop()
+			wg.Done()
+		}(n)
+	}
+
+	wg.Wait()
+}
+
+func (f fixture) waitForLeader() (bool, int) {
+	index := -1
+	isStable := waitForStable(time.Millisecond*UseMinLeaderTimeoutMs, 10+(UseMaxLeaderTimeoutMs/UseMinLeaderTimeoutMs), func() bool {
+		for i, n := range f.nodes {
+
+			if n.fsm.currentState == leaderState {
+				index = i
+				return true
+			}
+		}
+		return false
+	})
+
+	return isStable, index
+}
+
+func waitForStable(delay time.Duration, tries int, doFn func() bool) bool {
+	for tryCount := 0; tryCount < tries; tryCount = tryCount + 1 {
+		if doFn() == true {
+			return true
+		} else {
+			time.Sleep(delay)
+		}
+	}
+
+	log.Errorf("waitForStable not reached -- used delay: %v, tries: %v", delay, tries)
+
+	return false
+}
+
+type node struct {
 	client *rpc.Client
 	server common.Service
 	fsm    *NodeFSM
+}
+
+func (n node) start() {
+	startService(n.server)
+	startService(n.client)
+	startService(n.fsm)
+}
+
+func (n node) stop() {
+	stopService(n.client)
+	stopService(n.server)
+	stopService(n.fsm)
+}
+
+func startService(s common.Service) {
+	if s.Status() == common.Unstarted {
+		panicIfError(s.Start())
+	}
+}
+
+func stopService(s common.Service) {
+	if s.Status() == common.Started || s.Status() == common.Stopped {
+		panicIfError(s.Stop())
+	}
 }
 
 func panicIfError(err error) {
 	if err != nil {
 		panic(err)
 	}
-
 }
 
-func (f fixture) start() {
-	panicIfError(f.server.Start())
-	panicIfError(f.client.Start())
-	panicIfError(f.fsm.Start())
-}
+func makeNodes(numNodes int) fixture {
 
-func (f fixture) stop() {
-	panicIfError(f.client.Stop())
-	log.Info("Stopped client")
-	panicIfError(f.server.Stop())
-	log.Info("Stopped server")
-	panicIfError(f.fsm.Stop())
-	log.Info("Stopped fsm")
-}
-
-func removeAt(index int, s interface{}) interface{} {
-	t, v := reflect.TypeOf(s), reflect.ValueOf(s)
-	cpy := reflect.MakeSlice(t, v.Len(), v.Len())
-	reflect.Copy(cpy, v)
-	if index == 0 {
-		return cpy.Slice(1, cpy.Len()).Interface()
-	} else {
-		return reflect.AppendSlice(cpy.Slice(0, index), cpy.Slice(index+1, cpy.Len())).Interface()
-	}
-}
-
-func makeNodes(numNodes int) []fixture {
-
-	fixtures := make([]fixture, numNodes)
+	nodes := make([]node, numNodes)
 
 	nodeConfigs := makeNodeConfigs(numNodes)
 
@@ -72,14 +172,16 @@ func makeNodes(numNodes int) []fixture {
 
 		server := rpc.NewServer(cfg.Self, fsm, stateStore)
 
-		fixtures[i] = fixture{
+		nodes[i] = node{
 			client: client,
 			server: server,
 			fsm:    fsm,
 		}
 	}
 
-	return fixtures
+	return fixture{
+		nodes: nodes,
+	}
 }
 
 func makeNodeConfigs(numNodes int) []common.NodeConfig {
@@ -104,10 +206,10 @@ func makeConfigs(nodeConfigs []common.NodeConfig) []common.Config {
 		configs[i] = common.Config{
 			Self: nodeCfg,
 			Leader: common.LeaderConfig{
-				KeepAliveMs: 100,
+				KeepAliveMs: UseLeaderKeepAliveMs,
 				Timeout: common.LeaderTimeout{
-					MaxMillis: 1000,
-					MinMillis: 500,
+					MaxMillis: UseMaxLeaderTimeoutMs,
+					MinMillis: UseMinLeaderTimeoutMs,
 				},
 			},
 			Peers: removeAt(i, nodeConfigs).([]common.NodeConfig),
@@ -117,30 +219,13 @@ func makeConfigs(nodeConfigs []common.NodeConfig) []common.Config {
 	return configs
 }
 
-func TestOneLeaderActive(t *testing.T) {
-	log.SetLevel(log.InfoLevel)
-
-	n := makeNodes(3)
-
-	go func() {
-		n[0].start()
-
-	}()
-
-	go func() {
-		n[1].start()
-
-	}()
-
-	go func() {
-		n[2].start()
-	}()
-
-	time.Sleep(5 * time.Second)
-	n[1].stop()
-	time.Sleep(10 * time.Second)
-	log.Info("Starting....")
-	n[1].start()
-	time.Sleep(1000 * time.Second)
-
+func removeAt(index int, s interface{}) interface{} {
+	t, v := reflect.TypeOf(s), reflect.ValueOf(s)
+	cpy := reflect.MakeSlice(t, v.Len(), v.Len())
+	reflect.Copy(cpy, v)
+	if index == 0 {
+		return cpy.Slice(1, cpy.Len()).Interface()
+	} else {
+		return reflect.AppendSlice(cpy.Slice(0, index), cpy.Slice(index+1, cpy.Len())).Interface()
+	}
 }

@@ -20,7 +20,8 @@ type Client struct {
 
 	listener common.EventListener
 
-	peers                []common.NodeConfig
+	peers []common.NodeConfig
+
 	grpcConnInfoCh       chan grpcConnInfo
 	grpcClients          map[string]*grpcClient
 	unhealthyGrpcClients map[string]*grpcClient

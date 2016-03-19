@@ -1,7 +1,7 @@
 package rpc
 
 import (
-	log "github.com/Sirupsen/logrus"
+	"github.com/Sirupsen/logrus"
 	"github.com/xxtommoxx/raft-consensus/common"
 	"github.com/xxtommoxx/raft-consensus/rpc/proto"
 	"golang.org/x/net/context"
@@ -15,15 +15,7 @@ type RequestHandler interface {
 }
 
 type Server struct {
-	grpcServer *grpcServer
-}
-
-func (s *Server) Stop() error {
-	return s.grpcServer.Stop()
-}
-
-func (s *Server) Start() error {
-	return s.grpcServer.Start()
+	*grpcServer
 }
 
 func NewServer(nodeConfig common.NodeConfig, requestHandler RequestHandler,
@@ -42,11 +34,14 @@ type grpcServer struct {
 
 	requestHandler RequestHandler
 	stateStore     common.StateStore
+
+	log *logrus.Entry
 }
 
 func newGrpcServer(nodeConfig common.NodeConfig, requestHandler RequestHandler,
 	stateStore common.StateStore) *grpcServer {
 	grpcServer := &grpcServer{
+		log:            logrus.WithField("id", nodeConfig.Id),
 		nodeConfig:     nodeConfig,
 		requestHandler: requestHandler,
 		stateStore:     stateStore,
@@ -57,12 +52,12 @@ func newGrpcServer(nodeConfig common.NodeConfig, requestHandler RequestHandler,
 }
 
 func (s *grpcServer) syncStart() error {
-	log.Infof("Starting grpcServer using %v", s.nodeConfig.Host)
+	s.log.Infof("Starting grpcServer using %v", s.nodeConfig.Host)
 
 	lis, err := net.Listen("tcp", s.nodeConfig.Host)
 
 	if err != nil {
-		log.Error("grpcServer failed to start:", err)
+		s.log.Error("grpcServer failed to start:", err)
 		return err
 	} else {
 		grpcServer := grpc.NewServer()
@@ -75,11 +70,11 @@ func (s *grpcServer) syncStart() error {
 }
 
 func (s *grpcServer) asyncStart() {
-	log.Error("gRpc serve error:", s.grpcServer.Serve(s.listener))
+	s.log.Error("gRpc serve error:", s.grpcServer.Serve(s.listener))
 }
 
 func (s *grpcServer) syncStop() error {
-	log.Info("Stopping grpcServer")
+	s.log.Info("Stopping grpcServer")
 	s.grpcServer.Stop()
 	return nil
 }
@@ -107,6 +102,11 @@ func (s *grpcServer) newVoteResponse(voteGranted bool) *proto.VoteResponse {
 func (s *grpcServer) KeepAlive(ctx context.Context, req *proto.KeepAliveRequest) (*proto.KeepAliveResponse, error) {
 	_, errCh := s.requestHandler.KeepAlive(keepAliveRequestFromProto(req))
 	err := <-errCh
+
+	if err != nil {
+		s.log.Error(req)
+	}
+
 	return s.newKeepAliveResponse(), err
 }
 
@@ -117,6 +117,7 @@ func (s *grpcServer) ElectLeader(ctx context.Context, req *proto.VoteRequest) (*
 	case voteGranted := <-voteObtainedCh:
 		return s.newVoteResponse(voteGranted), nil
 	case err := <-errCh:
+		s.log.Error(err)
 		return s.newVoteResponse(false), err
 	}
 }
