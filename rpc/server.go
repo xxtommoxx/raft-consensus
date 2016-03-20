@@ -14,15 +14,9 @@ type RequestHandler interface {
 	KeepAlive(req *KeepAliveRequest) (<-chan struct{}, <-chan error)
 }
 
-type Server struct {
-	*grpcServer
-}
-
 func NewServer(nodeConfig common.NodeConfig, requestHandler RequestHandler,
 	stateStore common.StateStore) common.Service {
-	return &Server{
-		grpcServer: newGrpcServer(nodeConfig, requestHandler, stateStore),
-	}
+	return newGrpcServer(nodeConfig, requestHandler, stateStore)
 }
 
 type grpcServer struct {
@@ -70,7 +64,7 @@ func (s *grpcServer) syncStart() error {
 }
 
 func (s *grpcServer) asyncStart() {
-	s.log.Error("gRpc serve error:", s.grpcServer.Serve(s.listener))
+	s.log.Warn("gRpc serve error:", s.grpcServer.Serve(s.listener))
 }
 
 func (s *grpcServer) syncStop() error {
@@ -102,11 +96,6 @@ func (s *grpcServer) newVoteResponse(voteGranted bool) *proto.VoteResponse {
 func (s *grpcServer) KeepAlive(ctx context.Context, req *proto.KeepAliveRequest) (*proto.KeepAliveResponse, error) {
 	_, errCh := s.requestHandler.KeepAlive(keepAliveRequestFromProto(req))
 	err := <-errCh
-
-	if err != nil {
-		s.log.Error(req)
-	}
-
 	return s.newKeepAliveResponse(), err
 }
 
@@ -117,7 +106,6 @@ func (s *grpcServer) ElectLeader(ctx context.Context, req *proto.VoteRequest) (*
 	case voteGranted := <-voteObtainedCh:
 		return s.newVoteResponse(voteGranted), nil
 	case err := <-errCh:
-		s.log.Error(err)
 		return s.newVoteResponse(false), err
 	}
 }

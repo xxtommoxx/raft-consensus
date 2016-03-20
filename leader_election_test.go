@@ -5,6 +5,7 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/xxtommoxx/raft-consensus/common"
 	"github.com/xxtommoxx/raft-consensus/rpc"
+	"os"
 	"reflect"
 	"sync"
 	"testing"
@@ -17,39 +18,60 @@ const (
 	UseMaxLeaderTimeoutMs = 40
 )
 
+func TestMain(m *testing.M) {
+	log.SetLevel(log.ErrorLevel)
+	os.Exit(m.Run())
+}
+
 func TestOneLeaderActive(t *testing.T) {
-	fixture := makeNodes(5)
+	fixture := makeNodes(3)
 
 	defer fixture.stopAll()
 	fixture.startAll()
 
-	if leaderObtained, leaderIndex := fixture.waitForLeader(); leaderObtained {
-		runForTimes(50, func() {
-			for i, n := range fixture.nodes {
-				if i == leaderIndex && n.fsm.currentState != leaderState {
-					t.Fatal("Assumed leader is no longer leader")
-				} else if i != leaderIndex && n.fsm.currentState == leaderState {
-					t.Fatal("Multiple leaders")
-				}
+	leaderIndex := waitForLeader(t, fixture)
+	runForTimes(50, func() {
+		for i, n := range fixture.nodes {
+			if i == leaderIndex && n.fsm.currentState != leaderState {
+				t.Fatal("Assumed leader is no longer leader")
+			} else if i != leaderIndex && n.fsm.currentState == leaderState {
+				t.Fatal("Multiple leaders")
 			}
-		})
+		}
+	})
+}
+
+func TestNewLeaderWhenOldLeaderFail(t *testing.T) {
+	fixture := makeNodes(5) // quorum needs only 3 out of 5
+
+	defer fixture.stopAll()
+	fixture.startAll()
+
+	leaderIndex := waitForLeader(t, fixture)
+	fixture.nodes[leaderIndex].stop() // simulate node failed
+
+	newLeaderIndex := waitForLeader(t, fixture)
+
+	if newLeaderIndex == leaderIndex {
+		t.Fatalf("Expected new leader")
+	}
+}
+
+func waitForLeader(t *testing.T, f fixture) int {
+	if leaderObtained, leaderIndex := f.waitForLeader(); leaderObtained {
+		return leaderIndex
 	} else {
 		t.Fail()
+		return -1
 	}
 }
 
 func runForTimes(times int, fn func()) {
 	for i := 0; i < times; i++ {
 		fn()
-		time.Sleep(time.Millisecond * 10)
+		time.Sleep(time.Millisecond * 5)
 	}
 }
-
-// func assertStable(t *testing.T, failMsg string, delay time.Duration, tries int, doFn func() bool) {
-// 	if !waitForStable(delay, tries, doFn) {
-// 		t.Fatal(failMsg)
-// 	}
-// }
 
 type fixture struct {
 	nodes []node
@@ -89,7 +111,7 @@ func (f fixture) waitForLeader() (bool, int) {
 	isStable := waitForStable(time.Millisecond*UseMinLeaderTimeoutMs, 10+(UseMaxLeaderTimeoutMs/UseMinLeaderTimeoutMs), func() bool {
 		for i, n := range f.nodes {
 
-			if n.fsm.currentState == leaderState {
+			if n.fsm.currentState == leaderState && n.fsm.Status() != common.Stopped {
 				index = i
 				return true
 			}
@@ -139,7 +161,7 @@ func startService(s common.Service) {
 }
 
 func stopService(s common.Service) {
-	if s.Status() == common.Started || s.Status() == common.Stopped {
+	if s.Status() == common.Started {
 		panicIfError(s.Stop())
 	}
 }

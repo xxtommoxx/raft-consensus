@@ -190,7 +190,7 @@ func (c *clientSession) removeGrpcClient(id string) {
 	c.mutex.Lock()
 
 	if peerClient := c.peerClients[id]; peerClient != nil {
-		// close(peerClient.requestCh)
+		close(peerClient.requestCh)
 		delete(c.peerClients, id)
 	}
 }
